@@ -1,0 +1,104 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.log
+*.sqlite3
+.env
+.env.*
+.venv/
+venv/
+dist/
+build/
+.eggs/
+*.egg-info/
+*.egg
+*.bak
+.mypy_cache/
+.dmypy.json
+.pytest_cache/
+.coverage
+htmlcov/
+pip-wheel-metadata/
+.idea/
+.vscode/
+.cache/
+__pypackages__/
+
+# PyInstaller
+*.spec
+
+# pytest
+.cache
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# local config
+settings_local.py
+config_local.py
+
+# === iOS / Xcode ===
+*.xcuserstate
+*.xcworkspace
+DerivedData/
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserdatad
+*.xcscmblueprint
+*.xcodeproj/project.xcworkspace/xcuserdata
+*.xcodeproj/xcuserdata
+*.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/xcode/package.xcworkspace/
+.swiftpm/
+
+# fastlane
+fastlane/report.xml
+fastlane/screenshots
+fastlane/test_output
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# CocoaPods
+Pods/
+Podfile.lock
+Podfile.generated
+*.xcconfig
+
+# Carthage
+Carthage/
+
+# SPM cache
+SourcePackages/
+
+# === Other ===
+*.orig
+*.rej
+*.swp
+*.swo
+*.tmp
+*.log
+*.bak
+*.old
+*~
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Spotlight
+.metadata_never_index
