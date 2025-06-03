@@ -80,9 +80,26 @@ async def startup_tasks():
 
     logger.info("Запуск приложения DeferLink...")
 
-    # Валидация конфигурации
-    Config.validate_config()
-    logger.info("Конфигурация валидна")
+    #КРИТИЧНО: Валидация конфигурации ПЕРЕД запуском
+    try:
+        Config.validate_config()
+        logger.info("Конфигурация валидна")
+
+        # Вывод статуса конфигурации
+        logger.info(f"Environment: {Config.ENVIRONMENT}")
+        logger.info(f"SECRET_KEY: {'Set' if Config.SECRET_KEY != 'dev-secret-key-change-in-production' else 'DEFAULT (INSECURE!)'}")
+        logger.info(f"CORS Origins: {Config.CORS_ORIGINS}")
+        logger.info(f"Cookie Secure: {Config.COOKIE_SECURE}")
+        logger.info(f"Rate Limiting: {Config.RATE_LIMIT_ENABLED}")
+
+        if Config.ENVIRONMENT in ["production", "prod"]:
+            logger.info("PRODUCTION MODE - Security checks enabled")
+        else:
+            logger.info("🛠️ DEVELOPMENT MODE")
+
+    except ValueError as e:
+        logger.error(f"ОШИБКА КОНФИГУРАЦИИ: {e}")
+        raise SystemExit(1)  # Останавливаем приложение!
 
     # Инициализация базы данных
     init_database()

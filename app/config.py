@@ -4,6 +4,7 @@ Configuration settings for DeferLink system
 """
 
 import os
+import secrets
 from typing import List, Literal, cast
 
 
@@ -67,12 +68,46 @@ class Config:
     # Algorithm optimization
     AUTO_OPTIMIZE_WEIGHTS: bool = os.getenv("AUTO_OPTIMIZE_WEIGHTS", "false").lower() == "true"
 
+    # Environment detection
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development").lower()
+
     @classmethod
     def validate_config(cls) -> bool:
-        """Validate configuration settings"""
-        #if cls.SECRET_KEY == "dev-secret-key-change-in-production" and cls.COOKIE_SECURE:
-           # raise ValueError("SECRET_KEY must be changed in production")
+        """Validate configuration settings - ИСПРАВЛЕНО!"""
 
+        # 🔥 КРИТИЧНО: Проверка SECRET_KEY в продакшене
+        if cls.ENVIRONMENT in ["production", "prod"]:
+            if cls.SECRET_KEY == "dev-secret-key-change-in-production":
+                raise ValueError(
+                    "🚨 SECURITY ERROR: SECRET_KEY must be changed in production! "
+                    "Set ENVIRONMENT=production and SECRET_KEY=<secure-random-key>"
+                )
+
+            # Проверка длины ключа
+            if len(cls.SECRET_KEY) < 32:
+                raise ValueError(
+                    "🚨 SECURITY ERROR: SECRET_KEY must be at least 32 characters long in production"
+                )
+
+            # Проверка энтропии (не должен быть простым)
+            if cls._is_weak_secret_key(cls.SECRET_KEY):
+                raise ValueError(
+                    "🚨 SECURITY ERROR: SECRET_KEY appears to be weak. Use a cryptographically secure random key"
+                )
+
+            # Проверка CORS в продакшене
+            if "*" in cls.CORS_ORIGINS:
+                raise ValueError(
+                    "🚨 SECURITY ERROR: CORS_ORIGINS cannot contain '*' in production"
+                )
+
+            # Проверка HTTPS настроек
+            if not cls.COOKIE_SECURE:
+                raise ValueError(
+                    "🚨 SECURITY ERROR: COOKIE_SECURE must be True in production"
+                )
+
+        # Остальные проверки
         if cls.DEFAULT_TTL_HOURS <= 0 or cls.DEFAULT_TTL_HOURS > 168:  # Max 7 days
             raise ValueError("DEFAULT_TTL_HOURS must be between 1 and 168 hours")
 
@@ -86,3 +121,33 @@ class Config:
             raise ValueError("FRAUD_RISK_THRESHOLD must be between 0.0 and 1.0")
 
         return True
+
+    @classmethod
+    def _is_weak_secret_key(cls, key: str) -> bool:
+        """Проверка на слабые ключи"""
+        weak_patterns = [
+            "12345", "qwerty", "password", "secret", "admin", "test",
+            "abcdef", "111111", "000000", "123456789", "qwertyuiop"
+        ]
+
+        key_lower = key.lower()
+
+        # Проверка на простые паттерны
+        for pattern in weak_patterns:
+            if pattern in key_lower:
+                return True
+
+        # Проверка на повторяющиеся символы
+        if len(set(key)) < len(key) // 3:  # Слишком много повторений
+            return True
+
+        # Проверка на последовательности
+        if "abcdef" in key_lower or "123456" in key or "fedcba" in key_lower:
+            return True
+
+        return False
+
+    @classmethod
+    def generate_secure_secret_key(cls) -> str:
+        """Генерация безопасного SECRET_KEY"""
+        return secrets.token_urlsafe(32)  # 256-bit ключ
