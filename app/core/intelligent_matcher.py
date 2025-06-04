@@ -96,7 +96,7 @@ class IntelligentMatcher:
             is_match=is_match,
             confidence_score=best_score,
             details=best_details,
-            session_id=best_match['session_id'] if best_match else None
+            session_id=best_match.get('session_id') if best_match else None
         )
 
     def _calculate_match_score(self, browser_session: Dict[str, Any],

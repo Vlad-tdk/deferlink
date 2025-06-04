@@ -32,7 +32,7 @@ __pypackages__/
 
 # pytest
 .cache
-.db
+**/*.db
 # Jupyter Notebook
 .ipynb_checkpoints
 
