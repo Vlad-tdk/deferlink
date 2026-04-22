@@ -55,6 +55,31 @@ final class DeferLinkClient {
         try buildURL(path: "/safari-resolve")
     }
 
+    // MARK: - Events
+
+    /// POST /api/v1/events/batch — send a batch of events.
+    func sendEvents(_ events: [DeferLinkEvent]) async throws -> EventBatchResponse {
+        let url = try buildURL(path: "/api/v1/events/batch")
+
+        struct BatchBody: Encodable { let events: [DeferLinkEvent] }
+        let body = BatchBody(events: events)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+
+        DeferLinkLogger.debug("POST \(url) (\(events.count) events)")
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+
+        do {
+            return try JSONDecoder().decode(EventBatchResponse.self, from: data)
+        } catch {
+            throw DeferLinkError.decodingError(error)
+        }
+    }
+
     // MARK: - Health Check
 
     func healthCheck() async -> Bool {

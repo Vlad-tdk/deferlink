@@ -36,6 +36,7 @@ public final class DeferLink: NSObject {
     private var config:               DeferLinkConfiguration?
     private var client:               DeferLinkClient?
     private var fingerprintCollector: FingerprintCollector?
+    private var eventTracker:         EventTracker?
 
     private var safariVC:         SFSafariViewController?
     private var safariContinuation: CheckedContinuation<String?, Never>?
@@ -63,8 +64,10 @@ public final class DeferLink: NSObject {
 
     private func setup(config: DeferLinkConfiguration) {
         self.config               = config
-        self.client               = DeferLinkClient(config: config)
+        let newClient             = DeferLinkClient(config: config)
+        self.client               = newClient
         self.fingerprintCollector = FingerprintCollector(config: config)
+        self.eventTracker         = EventTracker(client: newClient, queue: EventQueue())
         DeferLinkLogger.isEnabled = config.debugLogging
         DeferLinkLogger.debug("DeferLink SDK configured — baseURL: \(config.baseURL)")
     }
@@ -119,6 +122,9 @@ public final class DeferLink: NSObject {
                     "✅ Resolved! method=\(result.matchMethod?.rawValue ?? "?") promoId=\(result.promoId ?? "-")"
                 )
                 collector.markFirstLaunchDone()
+                // Stamp attribution context into EventTracker for all subsequent events
+                eventTracker?.sessionId = response.sessionId
+                eventTracker?.promoId   = result.promoId
             } else {
                 DeferLinkLogger.debug("No match found")
             }
@@ -202,6 +208,71 @@ public final class DeferLink: NSObject {
         safariContinuation = nil
         if let sid = sessionId { DeferLinkLogger.debug("Safari cookie: \(sid.prefix(8))...") }
         continuation?.resume(returning: sessionId)
+    }
+
+    // MARK: - Event Tracking
+
+    /// Log a custom event.
+    ///
+    /// ```swift
+    /// DeferLink.shared.logEvent("af_content_view", properties: ["content_id": "article_42"])
+    /// ```
+    public func logEvent(
+        _ eventName: String,
+        properties:  [String: Any]? = nil,
+        appUserId:   String?        = nil
+    ) {
+        guard ensureConfigured() else { return }
+        var ev = DeferLinkEvent(eventName: eventName, properties: properties, appUserId: appUserId)
+        eventTracker?.track(ev)
+    }
+
+    /// Log a revenue event (e.g. purchase, subscription).
+    ///
+    /// ```swift
+    /// DeferLink.shared.logEvent(
+    ///     "af_purchase",
+    ///     revenue: 29.99, currency: "USD",
+    ///     properties: [DLEventParam.orderId: "order_789"]
+    /// )
+    /// ```
+    public func logEvent(
+        _ eventName: String,
+        revenue:     Double,
+        currency:    String         = "USD",
+        properties:  [String: Any]? = nil,
+        appUserId:   String?        = nil
+    ) {
+        guard ensureConfigured() else { return }
+        let ev = DeferLinkEvent(
+            eventName:  eventName,
+            revenue:    revenue,
+            currency:   currency,
+            properties: properties,
+            appUserId:  appUserId
+        )
+        eventTracker?.track(ev)
+    }
+
+    /// Log a pre-built ``DeferLinkEvent``.
+    ///
+    /// ```swift
+    /// DeferLink.shared.logEvent(.purchase(9.99, currency: "EUR"))
+    /// ```
+    public func logEvent(_ event: DeferLinkEvent) {
+        guard ensureConfigured() else { return }
+        eventTracker?.track(event)
+    }
+
+    /// Set the current user ID for all future events.
+    /// Call this after your authentication flow completes.
+    public func setUserId(_ userId: String?) {
+        eventTracker?.appUserId = userId
+    }
+
+    /// Manually flush all buffered events now (e.g. before process exit in tests).
+    public func flushEvents() {
+        eventTracker?.flush()
     }
 
     // MARK: - Utilities

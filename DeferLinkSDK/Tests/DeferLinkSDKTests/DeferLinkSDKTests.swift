@@ -187,4 +187,128 @@ final class DeferLinkSDKTests: XCTestCase {
         let handled = await DeferLink.shared.handleOpenURL(url)
         XCTAssertFalse(handled)
     }
+
+    // MARK: - DeferLinkEvent
+
+    func testEvent_defaultFieldsArePopulated() {
+        let ev = DeferLinkEvent(eventName: "af_content_view")
+        XCTAssertFalse(ev.eventId.isEmpty)
+        XCTAssertEqual(ev.eventName, "af_content_view")
+        XCTAssertFalse(ev.timestamp.isEmpty)
+        XCTAssertEqual(ev.platform, "iOS")
+        XCTAssertEqual(ev.currency, "USD")
+        XCTAssertNil(ev.revenue)
+    }
+
+    func testEvent_purchaseConvenience() {
+        let ev = DeferLinkEvent.purchase(9.99, currency: "EUR", properties: ["item_id": "pro"])
+        XCTAssertEqual(ev.eventName, DLEventName.purchase)
+        XCTAssertEqual(ev.revenue,   9.99)
+        XCTAssertEqual(ev.currency,  "EUR")
+        XCTAssertNotNil(ev.properties?["item_id"])
+    }
+
+    func testEvent_registrationConvenience() {
+        let ev = DeferLinkEvent.registration(method: "apple")
+        XCTAssertEqual(ev.eventName, DLEventName.completeRegistration)
+        XCTAssertNotNil(ev.properties?["registration_method"])
+    }
+
+    func testEvent_encodesToJSON() throws {
+        let ev = DeferLinkEvent(
+            eventName:  "af_purchase",
+            revenue:    29.99,
+            currency:   "USD",
+            properties: ["order_id": "ORD123"]
+        )
+        let data = try JSONEncoder().encode(ev)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(dict["event_name"] as? String,  "af_purchase")
+        XCTAssertEqual(dict["revenue"]    as? Double,  29.99)
+        XCTAssertFalse((dict["event_id"] as? String ?? "").isEmpty)
+        let props = dict["properties"] as? [String: Any]
+        XCTAssertEqual(props?["order_id"] as? String, "ORD123")
+    }
+
+    func testEvent_roundTripsJSON() throws {
+        let ev = DeferLinkEvent(eventName: "af_login", properties: ["method": "google"])
+        let data = try JSONEncoder().encode(ev)
+        let decoded = try JSONDecoder().decode(DeferLinkEvent.self, from: data)
+        XCTAssertEqual(decoded.eventId,   ev.eventId)
+        XCTAssertEqual(decoded.eventName, ev.eventName)
+        XCTAssertEqual(decoded.timestamp, ev.timestamp)
+    }
+
+    // MARK: - EventQueue
+
+    func testEventQueue_enqueueAndDrain() {
+        let q = EventQueue()
+        // Clean slate
+        q.drain { _ in }
+
+        let ev = DeferLinkEvent(eventName: "af_test")
+        q.enqueue([ev])
+
+        let expectation = self.expectation(description: "drain")
+        var drained: [DeferLinkEvent] = []
+        // Small delay so the serial queue processes enqueue first
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            q.drain { events in
+                drained = events
+                expectation.fulfill()
+            }
+        }
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(drained.count, 1)
+        XCTAssertEqual(drained.first?.eventName, "af_test")
+    }
+
+    func testEventQueue_drainClearsQueue() {
+        let q = EventQueue()
+        q.enqueue([DeferLinkEvent(eventName: "af_launch")])
+
+        let exp = expectation(description: "second drain")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            q.drain { _ in
+                // first drain consumed events
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    q.drain { second in
+                        XCTAssertTrue(second.isEmpty, "Queue should be empty after first drain")
+                        exp.fulfill()
+                    }
+                }
+            }
+        }
+        waitForExpectations(timeout: 3)
+    }
+
+    // MARK: - Standard event name constants
+
+    func testStandardEventNames_areCorrect() {
+        XCTAssertEqual(DLEventName.purchase,             "af_purchase")
+        XCTAssertEqual(DLEventName.completeRegistration, "af_complete_registration")
+        XCTAssertEqual(DLEventName.subscribe,            "af_subscribe")
+        XCTAssertEqual(DLEventName.addToCart,            "af_add_to_cart")
+        XCTAssertEqual(DLEventName.login,                "af_login")
+    }
+
+    // MARK: - AnyCodable
+
+    func testAnyCodable_encodesString() throws {
+        let v = AnyCodable("hello")
+        let d = try JSONEncoder().encode(v)
+        XCTAssertEqual(String(data: d, encoding: .utf8), "\"hello\"")
+    }
+
+    func testAnyCodable_encodesDouble() throws {
+        let v = AnyCodable(3.14)
+        let d = try JSONEncoder().encode(v)
+        XCTAssertEqual(String(data: d, encoding: .utf8), "3.14")
+    }
+
+    func testAnyCodable_encodesBool() throws {
+        let v = AnyCodable(true)
+        let d = try JSONEncoder().encode(v)
+        XCTAssertEqual(String(data: d, encoding: .utf8), "true")
+    }
 }

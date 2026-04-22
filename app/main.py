@@ -19,7 +19,7 @@ from .database import init_database
 from .deeplink_handler import DeepLinkHandler
 from .models import ResolveRequest, ResolveResponse
 from .utils import detect_ios_device, generate_instruction_page, get_client_ip
-from .api import deeplinks, health, stats
+from .api import deeplinks, health, stats, events as events_api
 from .core.iab_detector import detect_browser, should_escape_to_safari, EscapeStrategy
 from .core.safari_escape import generate_escape_page, build_app_store_url
 from .core import devicecheck as dc_module
@@ -190,6 +190,7 @@ app.add_middleware(
 app.include_router(deeplinks.router)
 app.include_router(health.router)
 app.include_router(stats.router)
+app.include_router(events_api.router)
 
 
 # Обработчик ошибок

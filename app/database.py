@@ -101,6 +101,12 @@ def init_database(db_path: Optional[str] = None) -> None:
     except Exception as e:
         logger.warning("Миграция add_devicecheck_fields не применена: %s", e)
 
+    try:
+        from .migrations.add_events_table import run as run_events_migration
+        run_events_migration(actual_db_path)
+    except Exception as e:
+        logger.warning("Миграция add_events_table не применена: %s", e)
+
 
 class DatabaseManager:
     """Менеджер для работы с базой данных"""
