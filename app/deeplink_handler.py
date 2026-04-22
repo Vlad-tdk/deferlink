@@ -15,6 +15,7 @@ from .config import Config
 from .database import db_manager
 from .models import ResolveRequest, FingerprintData, SessionData
 from .core.intelligent_matcher import IntelligentMatcher, MatchResult
+from .core.devicecheck import get_verifier as get_dc_verifier
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,8 @@ class DeepLinkHandler:
         screen_size: Optional[str] = None,
         model: Optional[str] = None,
         ttl_hours: Optional[int] = None,
-        ip_address: Optional[str] = None
+        ip_address: Optional[str] = None,
+        source_context: Optional[str] = None,   # 'safari', 'facebook_iab', ...
     ) -> str:
         """
         Создание новой браузерной сессии
@@ -57,38 +59,35 @@ class DeepLinkHandler:
             session_id = str(uuid.uuid4())
             ttl_hours = ttl_hours or self.config.DEFAULT_TTL_HOURS
 
-            # Вычисление времени истечения
             expires_at = datetime.now() + timedelta(hours=ttl_hours)
 
             query = """
                 INSERT INTO deeplink_sessions
                 (session_id, promo_id, domain, user_agent, timezone, language,
-                 screen_size, model, expires_at, ip_address, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                 screen_size, model, expires_at, ip_address, source_context, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """
 
             params = (
                 session_id, promo_id, domain, user_agent, timezone,
-                language, screen_size, model, expires_at, ip_address
+                language, screen_size, model, expires_at, ip_address, source_context
             )
 
             db_manager.execute_insert(query, params)
 
-            logger.info(f"Создана новая сессия: {session_id}")
+            logger.info("Создана новая сессия: %s [source=%s]", session_id, source_context)
 
-            # Логирование аналитики
             self._log_analytics_event("session_created", {
                 'session_id': session_id,
                 'promo_id': promo_id,
                 'domain': domain,
-                'user_agent': user_agent[:100] if user_agent else None,
-                'ip_address': ip_address,
+                'source_context': source_context,
             })
 
             return session_id
 
         except Exception as e:
-            logger.error(f"Ошибка создания сессии: {e}")
+            logger.error("Ошибка создания сессии: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Не удалось создать сессию"
@@ -109,70 +108,191 @@ class DeepLinkHandler:
 
     def find_matching_session(self, fingerprint: FingerprintData) -> Optional[Dict[str, Any]]:
         """
-        Поиск подходящей браузерной сессии с использованием ИИ алгоритма
+        Поиск сессии по многоуровневой стратегии матчинга.
+
+        Приоритет (от наиболее к наименее точному):
+          Tier 1 — clipboard_token      : 100% (точный ID сессии из буфера обмена)
+          Tier 2 — safari_cookie_session : ~99% (shared cookie jar Safari ↔ SFSafariViewController)
+          Tier 3 — device_check_token   : ~97% (Apple подтверждённый токен устройства)
+          Tier 4 — fingerprint matching : ~60-90% (IntelligentMatcher)
         """
         try:
             self.stats['total_requests'] += 1
 
-            # Получение кандидатов из базы данных
-            query = """
-                SELECT session_id, promo_id, domain, created_at, user_agent,
-                       timezone, language, screen_size, model, ip_address,
-                       match_confidence, match_details
-                FROM deeplink_sessions
-                WHERE expires_at > CURRENT_TIMESTAMP
-                AND is_resolved = FALSE
-                ORDER BY created_at DESC
-                LIMIT 50
-            """
+            # ── Tier 1: Clipboard token ────────────────────────────────────────
+            # Самый надёжный метод: escape-страница записала session_id в clipboard,
+            # приложение прочитало его при первом запуске.
+            if fingerprint.clipboard_token:
+                session = self._match_by_clipboard_token(fingerprint.clipboard_token)
+                if session:
+                    logger.info(
+                        "Tier-1 clipboard match: session=%s confidence=1.0",
+                        session['session_id']
+                    )
+                    session['match_method']     = 'clipboard'
+                    session['match_confidence'] = 1.0
+                    session['match_details']    = {'method': 'clipboard_token', 'tier': 1}
+                    self.stats['successful_matches'] += 1
+                    self._update_average_confidence(1.0)
+                    return session
 
-            candidates = db_manager.execute_query(query)
+            # ── Tier 2: SFSafariViewController cookie ──────────────────────────
+            # Если пользователь открыл ссылку в Safari, там был установлен cookie.
+            # Приложение открывает SFSafariViewController → shared cookie jar → читает session_id.
+            if fingerprint.safari_cookie_session_id:
+                session = self.get_session(fingerprint.safari_cookie_session_id)
+                if session and not session.get('is_resolved'):
+                    logger.info(
+                        "Tier-2 safari-cookie match: session=%s confidence=0.99",
+                        session['session_id']
+                    )
+                    session['match_method']     = 'safari_cookie'
+                    session['match_confidence'] = 0.99
+                    session['match_details']    = {'method': 'safari_cookie_session_id', 'tier': 2}
+                    self.stats['successful_matches'] += 1
+                    self._update_average_confidence(0.99)
+                    return session
 
+            # ── Tier 3: Apple DeviceCheck token ───────────────────────────────
+            # Токен уникален для устройства + Team ID.
+            # При повторных запусках сопоставляем хэш токена с БД.
+            if fingerprint.device_check_token and Config.DEVICECHECK_ENABLED:
+                session = self._match_by_devicecheck_sync(fingerprint.device_check_token)
+                if session:
+                    logger.info(
+                        "Tier-3 devicecheck match: session=%s confidence=0.97",
+                        session['session_id']
+                    )
+                    session['match_method']     = 'device_check'
+                    session['match_confidence'] = 0.97
+                    session['match_details']    = {'method': 'device_check_token', 'tier': 3}
+                    self.stats['successful_matches'] += 1
+                    self._update_average_confidence(0.97)
+                    return session
+
+            # ── Tier 4: Intelligent fingerprint matching ───────────────────────
+            candidates = self._get_candidates()
             if not candidates:
-                logger.info("Нет кандидатов для сопоставления")
+                logger.info("Нет кандидатов для fingerprint сопоставления")
                 self.stats['failed_matches'] += 1
                 return None
 
-            # Нормализация fingerprint для передачи в matcher
             app_fingerprint = self._normalize_fingerprint(fingerprint)
+            match_result    = self.intelligent_matcher.find_best_match(app_fingerprint, candidates)
 
-            # Использование ИИ алгоритма для поиска лучшего совпадения
-            match_result = self.intelligent_matcher.find_best_match(app_fingerprint, candidates)
-
-            # Логирование результата сопоставления
-            logger.info(f"Результат ИИ сопоставления: match={match_result.is_match}, "
-                       f"confidence={match_result.confidence_score:.3f}, "
-                       f"session_id={match_result.session_id}")
+            logger.info(
+                "Tier-4 fingerprint: match=%s confidence=%.3f session=%s",
+                match_result.is_match,
+                match_result.confidence_score,
+                match_result.session_id,
+            )
 
             if match_result.is_match and match_result.session_id:
-                # Обновление статистики
                 self.stats['successful_matches'] += 1
                 self._update_average_confidence(match_result.confidence_score)
 
-                # Поиск полной информации о сессии
-                session = next((s for s in candidates if s['session_id'] == match_result.session_id), None)
+                session = next(
+                    (s for s in candidates if s['session_id'] == match_result.session_id),
+                    None
+                )
                 if session:
                     session['match_confidence'] = match_result.confidence_score
-                    session['match_details'] = match_result.details
+                    session['match_details']    = {**match_result.details, 'method': 'fingerprint', 'tier': 4}
                     return session
 
             self.stats['failed_matches'] += 1
             return None
 
         except Exception as e:
-            logger.error(f"Критическая ошибка при поиске сессии: {e}")
+            logger.error("Критическая ошибка при поиске сессии: %s", e)
             self.stats['failed_matches'] += 1
             return None
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Tier-specific matchers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _match_by_clipboard_token(self, raw_token: str) -> Optional[Dict[str, Any]]:
+        """
+        Tier 1: Найти сессию по clipboard-токену.
+
+        Escape-страница пишет в clipboard строку вида "deferlink:<session_id>".
+        Приложение читает clipboard, парсит session_id, передаёт сюда.
+        """
+        try:
+            prefix = Config.CLIPBOARD_TOKEN_PREFIX + ":"
+            session_id = raw_token.lstrip()
+
+            # Убираем префикс если есть
+            if session_id.startswith(prefix):
+                session_id = session_id[len(prefix):]
+
+            if not session_id:
+                return None
+
+            return self.get_session(session_id)
+
+        except Exception as e:
+            logger.warning("Ошибка clipboard-матчинга: %s", e)
+            return None
+
+    def _match_by_devicecheck_sync(self, device_token_b64: str) -> Optional[Dict[str, Any]]:
+        """
+        Tier 3: Найти сессию по хэшу DeviceCheck токена.
+        Работает при повторных запусках (сессия уже связана с хэшем токена).
+        Первичная привязка происходит в mark_session_resolved().
+        """
+        try:
+            from .core.devicecheck import DeviceCheckVerifier
+            token_hash = DeviceCheckVerifier.hash_token(device_token_b64)
+
+            query = """
+                SELECT session_id, promo_id, domain, created_at, user_agent,
+                       timezone, language, screen_size, model, ip_address,
+                       match_confidence, match_details
+                FROM deeplink_sessions
+                WHERE device_check_token_hash = ?
+                  AND expires_at > CURRENT_TIMESTAMP
+                  AND is_resolved = FALSE
+                LIMIT 1
+            """
+            results = db_manager.execute_query(query, (token_hash,))
+            return results[0] if results else None
+
+        except Exception as e:
+            logger.warning("Ошибка DeviceCheck-матчинга: %s", e)
+            return None
+
+    def _get_candidates(self) -> List[Dict[str, Any]]:
+        """Получить активные нематченые сессии для fingerprint matching."""
+        query = """
+            SELECT session_id, promo_id, domain, created_at, user_agent,
+                   timezone, language, screen_size, model, ip_address,
+                   match_confidence, match_details
+            FROM deeplink_sessions
+            WHERE expires_at > CURRENT_TIMESTAMP
+              AND is_resolved = FALSE
+            ORDER BY created_at DESC
+            LIMIT 50
+        """
+        return db_manager.execute_query(query)
 
     def mark_session_resolved(
         self,
         session_id: str,
         confidence_score: Optional[float] = None,
-        match_details: Optional[Dict[str, Any]] = None
+        match_details: Optional[Dict[str, Any]] = None,
+        device_check_token_b64: Optional[str] = None,  # Сохраняем хэш для будущих запусков
     ) -> bool:
-        """Отметка сессии как разрешенной"""
+        """Отметка сессии как разрешенной + привязка DeviceCheck токена."""
         try:
             match_details_json = json.dumps(match_details) if match_details else None
+
+            # Хэшируем DeviceCheck токен для хранения (не сырой токен!)
+            dc_hash: Optional[str] = None
+            if device_check_token_b64 and Config.DEVICECHECK_ENABLED:
+                from .core.devicecheck import DeviceCheckVerifier
+                dc_hash = DeviceCheckVerifier.hash_token(device_check_token_b64)
 
             query = """
                 UPDATE deeplink_sessions
@@ -180,26 +300,32 @@ class DeepLinkHandler:
                     resolved_at = CURRENT_TIMESTAMP,
                     match_confidence = ?,
                     match_details = ?,
+                    device_check_token_hash = COALESCE(?, device_check_token_hash),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE session_id = ?
             """
 
             rows_affected = db_manager.execute_update(
-                query, (confidence_score, match_details_json, session_id)
+                query, (confidence_score, match_details_json, dc_hash, session_id)
             )
 
             if rows_affected > 0:
-                logger.info(f"Сессия {session_id} отмечена как разрешенная")
+                method = (match_details or {}).get('method', 'unknown')
+                logger.info(
+                    "Сессия %s resolved | method=%s confidence=%.3f",
+                    session_id, method, confidence_score or 0.0
+                )
                 self._log_analytics_event("session_resolved", {
                     'session_id': session_id,
-                    'confidence_score': confidence_score
+                    'confidence_score': confidence_score,
+                    'match_method': method,
                 })
                 return True
 
             return False
 
         except Exception as e:
-            logger.error(f"Ошибка отметки сессии как разрешенной: {e}")
+            logger.error("Ошибка отметки сессии как разрешенной: %s", e)
             return False
 
     def cleanup_expired_sessions(self) -> int:

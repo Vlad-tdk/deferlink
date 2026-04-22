@@ -21,6 +21,24 @@ class FingerprintData(BaseModel):
     app_version: Optional[str] = Field(None, description="Версия приложения")
     idfv: Optional[str] = Field(None, description="Identifier for Vendor (iOS)")
 
+    # ── Высокоточные сигналы (Tier 1 & 2) ─────────────────────────────────────
+    clipboard_token: Optional[str] = Field(
+        None,
+        description="Токен из буфера обмена (записан escape-страницей в IAB)"
+    )
+    device_check_token: Optional[str] = Field(
+        None,
+        description="Apple DeviceCheck token (base64) — только нативный iOS"
+    )
+    safari_cookie_session_id: Optional[str] = Field(
+        None,
+        description="Session ID полученный через SFSafariViewController (shared cookie jar)"
+    )
+    is_first_launch: Optional[bool] = Field(
+        None,
+        description="Первый запуск приложения — наиболее важный момент для матчинга"
+    )
+
     @validator("screen_size", pre=True, always=True)
     def set_screen_size(cls, v, values):
         """Автоматическое формирование screen_size из width/height"""
@@ -94,9 +112,12 @@ class ResolveResponse(BaseModel):
     app_url: Optional[str] = Field(None, description="URL приложения")
     matched: bool = Field(False, description="Найдено ли совпадение")
     message: Optional[str] = Field(None, description="Сообщение")
+    match_method: Optional[str] = Field(
+        None,
+        description="Метод матчинга: clipboard | safari_cookie | device_check | fingerprint"
+    )
 
     def __init__(self, success: bool, **data):
-        # Устанавливаем дефолтные значения для обязательных полей
         super().__init__(
             success=success,
             promo_id=data.get('promo_id'),
@@ -105,7 +126,8 @@ class ResolveResponse(BaseModel):
             redirect_url=data.get('redirect_url'),
             app_url=data.get('app_url'),
             matched=data.get('matched', False),
-            message=data.get('message')
+            message=data.get('message'),
+            match_method=data.get('match_method'),
         )
 
     class Config:

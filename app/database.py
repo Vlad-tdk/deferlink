@@ -94,6 +94,13 @@ def init_database(db_path: Optional[str] = None) -> None:
     finally:
         conn.close()
 
+    # Запуск миграций
+    try:
+        from .migrations.add_devicecheck_fields import run as run_dc_migration
+        run_dc_migration(actual_db_path)
+    except Exception as e:
+        logger.warning("Миграция add_devicecheck_fields не применена: %s", e)
+
 
 class DatabaseManager:
     """Менеджер для работы с базой данных"""

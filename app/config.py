@@ -71,6 +71,25 @@ class Config:
     # Environment detection
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development").lower()
 
+    # ── Apple DeviceCheck ──────────────────────────────────────────────────────
+    # Получить в Apple Developer → Certificates, IDs & Profiles → Keys
+    DEVICECHECK_ENABLED: bool     = os.getenv("DEVICECHECK_ENABLED", "false").lower() == "true"
+    DEVICECHECK_TEAM_ID: str      = os.getenv("DEVICECHECK_TEAM_ID", "")
+    DEVICECHECK_KEY_ID: str       = os.getenv("DEVICECHECK_KEY_ID", "")
+    DEVICECHECK_KEY_PATH: str     = os.getenv("DEVICECHECK_KEY_PATH", "")  # путь до .p8
+    DEVICECHECK_SANDBOX: bool     = os.getenv("DEVICECHECK_SANDBOX", "true").lower() == "true"
+
+    # ── IAB Escape (Safari Escape) ─────────────────────────────────────────────
+    # App Store ID вашего приложения (числовой, например "6451111234")
+    APP_STORE_ID: str             = os.getenv("APP_STORE_ID", "")
+    APP_NAME: str                 = os.getenv("APP_NAME", "приложение")
+    # Префикс для clipboard-токена (должен совпадать со Swift-клиентом)
+    CLIPBOARD_TOKEN_PREFIX: str   = os.getenv("CLIPBOARD_TOKEN_PREFIX", "deferlink")
+
+    # ── SFSafariViewController cookie resolve ──────────────────────────────────
+    # URL scheme вашего приложения (для redirect из SFSafariViewController)
+    APP_URL_SCHEME: str           = os.getenv("APP_URL_SCHEME", "deferlink")
+
     @classmethod
     def validate_config(cls) -> bool:
         """Validate configuration settings - ИСПРАВЛЕНО!"""

@@ -68,14 +68,15 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
         matching_session = deeplink_handler.find_matching_session(request.fingerprint)
 
         if matching_session:
-            # Отметка сессии как разрешенной
             confidence_score = matching_session.get('match_confidence', 0.0)
-            match_details = matching_session.get('match_details', {})
+            match_details    = matching_session.get('match_details', {})
+            match_method     = matching_session.get('match_method') or (match_details or {}).get('method')
 
             deeplink_handler.mark_session_resolved(
-                matching_session['session_id'],
-                confidence_score,
-                match_details
+                session_id=matching_session['session_id'],
+                confidence_score=confidence_score,
+                match_details=match_details,
+                device_check_token_b64=request.fingerprint.device_check_token,
             )
 
             return ResolveResponse(
@@ -86,6 +87,7 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 redirect_url=request.fallback_url,
                 app_url=request.app_scheme,
                 matched=True,
+                match_method=match_method,
                 message="Сессия успешно разрешена"
             )
         else:
@@ -97,6 +99,7 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 redirect_url=request.fallback_url,
                 app_url=request.app_scheme,
                 matched=False,
+                match_method=None,
                 message="Подходящая сессия не найдена"
             )
 

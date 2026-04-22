@@ -20,6 +20,9 @@ from .deeplink_handler import DeepLinkHandler
 from .models import ResolveRequest, ResolveResponse
 from .utils import detect_ios_device, generate_instruction_page, get_client_ip
 from .api import deeplinks, health, stats
+from .core.iab_detector import detect_browser, should_escape_to_safari, EscapeStrategy
+from .core.safari_escape import generate_escape_page, build_app_store_url
+from .core import devicecheck as dc_module
 
 # Настройка логирования
 logging.basicConfig(
@@ -104,6 +107,18 @@ async def startup_tasks():
     # Инициализация базы данных
     init_database()
     logger.info("База данных инициализирована")
+
+    # Инициализация DeviceCheck верификатора
+    if Config.DEVICECHECK_ENABLED:
+        dc_module.init_verifier(
+            team_id=Config.DEVICECHECK_TEAM_ID or None,
+            key_id=Config.DEVICECHECK_KEY_ID or None,
+            private_key_path=Config.DEVICECHECK_KEY_PATH or None,
+            use_sandbox=Config.DEVICECHECK_SANDBOX,
+        )
+        logger.info("DeviceCheck верификатор инициализирован")
+    else:
+        logger.info("DeviceCheck отключён (DEVICECHECK_ENABLED=false)")
 
     # Запуск фоновых задач
     _cleanup_task = asyncio.create_task(cleanup_task())
@@ -273,7 +288,11 @@ async def create_deeplink(
                 # Возврат HTML страницы с инструкциями
                 return HTMLResponse(content=generate_instruction_page(domain, promo_id))
 
-    # Создание новой сессии с расширенными данными
+    # ── Определяем контекст браузера ──────────────────────────────────────────
+    browser_info = detect_browser(user_agent)
+    source_context = browser_info.context.value
+
+    # Создание новой сессии
     try:
         new_session_id = deeplink_handler.create_session(
             promo_id=promo_id,
@@ -284,38 +303,103 @@ async def create_deeplink(
             screen_size=screen_size,
             model=model,
             ttl_hours=ttl,
-            ip_address=client_ip
+            ip_address=client_ip,
+            source_context=source_context,
         )
 
-        # Установка cookie
+        logger.info(
+            "Создана сессия: %s | source=%s | ip=%s",
+            new_session_id, source_context, client_ip
+        )
+
         samesite_value: Literal["lax", "strict", "none"] = Config.COOKIE_SAMESITE
 
-        response.set_cookie(
-            key=Config.COOKIE_NAME,
-            value=new_session_id,
-            max_age=ttl * 3600,  # TTL в секундах
-            secure=Config.COOKIE_SECURE,
-            httponly=Config.COOKIE_HTTPONLY,
-            samesite=samesite_value
-        )
+        def _set_cookie(resp: Response) -> Response:
+            """Устанавливает cookie на любой ответ (RedirectResponse или HTMLResponse)."""
+            resp.set_cookie(
+                key=Config.COOKIE_NAME,
+                value=new_session_id,
+                max_age=ttl * 3600,
+                secure=Config.COOKIE_SECURE,
+                httponly=Config.COOKIE_HTTPONLY,
+                samesite=samesite_value,
+            )
+            return resp
 
-        logger.info(f"Создана новая сессия: {new_session_id} от IP: {client_ip}")
+        # ── IAB detected → Safari escape ──────────────────────────────────────
+        if should_escape_to_safari(browser_info):
+            store_id  = promo_id if promo_id.isdigit() else Config.APP_STORE_ID
+            store_url = (
+                build_app_store_url(store_id)
+                if store_id
+                else "https://apps.apple.com"
+            )
 
-        # Определение действия на основе user agent
+            if browser_info.clipboard_reliable:
+                logger.info(
+                    "IAB escape [clipboard+appstore]: source=%s session=%s",
+                    source_context, new_session_id
+                )
+                html = generate_escape_page(
+                    session_token=new_session_id,
+                    app_store_url=store_url,
+                    app_name=Config.APP_NAME,
+                    app_store_id=store_id or None,
+                )
+                return HTMLResponse(content=html)
+            else:
+                logger.info(
+                    "IAB escape [appstore-only]: source=%s session=%s",
+                    source_context, new_session_id
+                )
+                return _set_cookie(RedirectResponse(url=store_url, status_code=302))
+
+        # ── Safari или неизвестный браузер ─────────────────────────────────────
         if detect_ios_device(user_agent):
-            # Редирект в App Store для iOS
-            app_store_url = f"https://apps.apple.com/app/id{promo_id}" if promo_id.isdigit() else "https://apps.apple.com"
-            return RedirectResponse(url=app_store_url)
-        else:
-            # Возврат HTML страницы с инструкциями
-            return HTMLResponse(content=generate_instruction_page(domain, promo_id))
+            store_id  = promo_id if promo_id.isdigit() else Config.APP_STORE_ID
+            store_url = build_app_store_url(store_id) if store_id else "https://apps.apple.com"
+            # Cookie важен для SFSafariViewController (Tier 2 matching)
+            return _set_cookie(RedirectResponse(url=store_url, status_code=302))
+
+        return HTMLResponse(content=generate_instruction_page(domain, promo_id))
 
     except Exception as e:
-        logger.error(f"Ошибка создания сессии: {e}")
+        logger.error("Ошибка создания сессии: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Ошибка создания сессии диплинка"
         )
+
+
+@app.get("/safari-resolve")
+async def safari_cookie_resolve(
+    request: Request,
+    session_id: Optional[str] = Cookie(None, alias=Config.COOKIE_NAME),
+):
+    """
+    SFSafariViewController Silent Cookie Resolve.
+
+    Приложение открывает этот URL в SFSafariViewController на первом запуске.
+    SFSafariViewController разделяет cookie-jar с Safari — если пользователь
+    ранее переходил по нашей ссылке в Safari, cookie с session_id уже есть.
+
+    Страница читает cookie → делает redirect на custom URL scheme → app получает session_id.
+
+    Схема: deferlink://resolved?session_id=<id>
+    """
+    app_scheme = Config.APP_URL_SCHEME
+
+    if session_id:
+        existing = deeplink_handler.get_session(session_id)
+        if existing and not existing.get('is_resolved'):
+            # Редирект в приложение с session_id через URL scheme
+            logger.info("safari-resolve: cookie match session=%s", session_id)
+            redirect_url = f"{app_scheme}://resolved?session_id={session_id}"
+            return RedirectResponse(url=redirect_url)
+
+    # Cookie не найден — тихо закрываем через redirect без session_id
+    # Приложение поймает этот callback и продолжит с fingerprint matching
+    return RedirectResponse(url=f"{app_scheme}://resolved?session_id=none")
 
 
 @app.post("/resolve", response_model=ResolveResponse)
@@ -334,18 +418,21 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
         matching_session = deeplink_handler.find_matching_session(request.fingerprint)
 
         if matching_session:
-            # Отметка сессии как разрешенной с сохранением данных о matching
             confidence_score = matching_session.get('match_confidence', 0.0)
-            match_details = matching_session.get('match_details', {})
+            match_details    = matching_session.get('match_details', {})
+            match_method     = matching_session.get('match_method') or (match_details or {}).get('method')
 
             deeplink_handler.mark_session_resolved(
-                matching_session['session_id'],
-                confidence_score,
-                match_details
+                session_id=matching_session['session_id'],
+                confidence_score=confidence_score,
+                match_details=match_details,
+                device_check_token_b64=request.fingerprint.device_check_token,
             )
 
-            logger.info(f"Найдено совпадение для сессии: {matching_session['session_id']} "
-                       f"с уверенностью: {confidence_score:.3f}")
+            logger.info(
+                "Resolved: session=%s method=%s confidence=%.3f",
+                matching_session['session_id'], match_method, confidence_score
+            )
 
             return ResolveResponse(
                 success=True,
@@ -355,6 +442,7 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 redirect_url=request.fallback_url,
                 app_url=request.app_scheme,
                 matched=True,
+                match_method=match_method,
                 message="Сессия успешно разрешена"
             )
         else:
@@ -367,6 +455,7 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 redirect_url=request.fallback_url,
                 app_url=request.app_scheme,
                 matched=False,
+                match_method=None,
                 message="Совпадение не найдено или сессия истекла"
             )
 
