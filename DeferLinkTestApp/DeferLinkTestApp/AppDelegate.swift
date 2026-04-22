@@ -2,59 +2,71 @@
 //  AppDelegate.swift
 //  DeferLinkTestApp
 //
-//  Created by Vladimir Martemianov on 3. 6. 2025..
+//  Интеграция DeferLinkSDK — минимальный пример.
 //
 
 import UIKit
+import DeferLinkSDK   // ← подключаем SDK
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
-    
-    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        print("DeferLink Test App запущено")
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
+
+        // ── 1. Настройка SDK ──────────────────────────────────────────────────
+        // baseURL — адрес вашего DeferLink сервера
+        // appURLScheme — URL scheme из Info.plist (URL Types → "defrtest")
+        DeferLink.configure(
+            baseURL: "http://localhost:8000",
+            appURLScheme: "defrtest",
+            debugLogging: true
+        )
+
+        // ── 2. Resolve при первом запуске ─────────────────────────────────────
+        DeferLink.shared.resolveOnFirstLaunch { result in
+            guard let result = result else {
+                print("DeferLink: совпадение не найдено")
+                return
+            }
+
+            print("✅ DeferLink resolved!")
+            print("   promoId:     \(result.promoId ?? "-")")
+            print("   domain:      \(result.domain ?? "-")")
+            print("   matchMethod: \(result.matchMethod?.rawValue ?? "-")")
+
+            // Уведомляем UI
+            NotificationCenter.default.post(
+                name: .deferLinkReceived,
+                object: nil,
+                userInfo: [
+                    "promoId": result.promoId as Any,
+                    "domain":  result.domain  as Any,
+                    "method":  result.matchMethod?.rawValue as Any
+                ]
+            )
+        }
+
         return true
     }
-    
-    // MARK: - URL Scheme Handling
-    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
-        print("Получен deep link: \(url)")
-        
-        // Обработка deep link
-        if url.scheme == "defrtest" {
-            handleDeepLink(url)
-            return true
-        }
-        
-        return false
+
+    // ── 3. Обработка URL scheme ───────────────────────────────────────────────
+    func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+    ) -> Bool {
+        return DeferLink.shared.handleOpenURL(url)
     }
-    
-    private func handleDeepLink(_ url: URL) {
-        print("Обработка deep link: \(url.absoluteString)")
-        
-        // Получаем параметры из URL
-        let urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        let queryItems = urlComponents?.queryItems
-        
-        var params: [String: String] = [:]
-        queryItems?.forEach { item in
-            params[item.name] = item.value
-        }
-        
-        // Отправляем уведомление о получении deep link
-        NotificationCenter.default.post(
-            name: NSNotification.Name("DeepLinkReceived"),
-            object: nil,
-            userInfo: [
-                "url": url.absoluteString,
-                "params": params
-            ]
-        )
-        
-        print("Deep link параметры: \(params)")
-    }
-    
-    // MARK: UISceneSession Lifecycle
-    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
-        return UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
+
+    // MARK: - Scene lifecycle
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
     }
 }
