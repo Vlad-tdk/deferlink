@@ -107,6 +107,12 @@ def init_database(db_path: Optional[str] = None) -> None:
     except Exception as e:
         logger.warning("Миграция add_events_table не применена: %s", e)
 
+    try:
+        from .migrations.add_cloaking_tables import run as run_cloaking_migration
+        run_cloaking_migration(actual_db_path)
+    except Exception as e:
+        logger.warning("Миграция add_cloaking_tables не применена: %s", e)
+
 
 class DatabaseManager:
     """Менеджер для работы с базой данных"""
