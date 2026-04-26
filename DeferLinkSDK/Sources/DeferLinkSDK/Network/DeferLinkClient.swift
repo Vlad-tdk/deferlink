@@ -80,6 +80,33 @@ final class DeferLinkClient {
         }
     }
 
+    // MARK: - SKAdNetwork
+
+    /// GET /api/v1/skan/config?app_id=… — fetch CV encoding configuration.
+    func fetchSKANConfig(appId: String) async throws -> SKANConfig {
+        var components = URLComponents(
+            url: try buildURL(path: "/api/v1/skan/config"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "app_id", value: appId)]
+        guard let url = components?.url else {
+            throw DeferLinkError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        DeferLinkLogger.debug("GET \(url)")
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+
+        do {
+            return try JSONDecoder().decode(SKANConfig.self, from: data)
+        } catch {
+            throw DeferLinkError.decodingError(error)
+        }
+    }
+
     // MARK: - Health Check
 
     func healthCheck() async -> Bool {
