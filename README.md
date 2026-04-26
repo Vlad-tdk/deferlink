@@ -8,7 +8,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![iOS](https://img.shields.io/badge/iOS-15+-000000?logo=apple&logoColor=white)](https://developer.apple.com)
 [![Swift](https://img.shields.io/badge/Swift-5.9-FA7343?logo=swift&logoColor=white)](https://swift.org)
-[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache-blue)](LICENSE)
 
 [Быстрый старт](#быстрый-старт) · [Как работает](#как-работает) · [iOS SDK](#ios-sdk) · [Event Tracking](#отслеживание-событий) · [API](#api-reference) · [Конфигурация](#конфигурация)
 
@@ -1044,4 +1044,4 @@ deferlink/
 
 ## License
 
-MIT
+Apache 2.0.
