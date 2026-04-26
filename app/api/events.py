@@ -9,6 +9,7 @@ GET  /api/v1/events/revenue  — daily revenue cohort
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -55,6 +56,17 @@ class EventRequest(BaseModel):
     @validator("currency")
     def upper_currency(cls, v: str) -> str:
         return v.upper()
+
+    @validator("timestamp")
+    def validate_timestamp(cls, v: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("timestamp must be valid ISO 8601") from exc
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
     @validator("properties")
     def limit_properties(cls, v: Optional[Dict]) -> Optional[Dict]:
@@ -117,10 +129,11 @@ async def track_event(body: EventRequest, request: Request):
         sdk_version=body.sdk_version,
         ip_address=ip,
     )
-    if ok:
+    if ok == "inserted":
         return EventResponse(success=True, message="Event tracked", event_id=body.event_id)
-    # INSERT OR IGNORE fired — duplicate
-    return EventResponse(success=True, message="Duplicate event ignored", event_id=body.event_id)
+    if ok == "duplicate":
+        return EventResponse(success=True, message="Duplicate event ignored", event_id=body.event_id)
+    raise HTTPException(status_code=500, detail="Error tracking event")
 
 
 @router.post("/batch", response_model=BatchEventResponse, summary="Track up to 100 events")

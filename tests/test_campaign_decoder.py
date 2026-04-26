@@ -17,12 +17,13 @@ from app.core.skadnetwork.models import (
 
 
 def _pb(*, cv=None, coarse=None, source_id="1234", campaign_id=None,
-        seq=PostbackSequence.PB1) -> SKANPostback:
+        seq=PostbackSequence.PB1, app_id="com.test.app") -> SKANPostback:
     return SKANPostback(
         version="4.0",
         ad_network_id="com.example",
         transaction_id="tx-x",
         postback_sequence_index=seq,
+        app_id=app_id,
         source_identifier=source_id,
         campaign_id=campaign_id,
         conversion_value=cv,
@@ -36,6 +37,7 @@ def decoder() -> CampaignDecoder:
     d.load([{
         "source_identifier": "1234",
         "campaign_id":       None,
+        "app_id":            "com.test.app",
         "enabled":           1,
         "decoder_json": json.dumps([
             {"cv_min": 0,  "cv_max": 20, "capi_event": "Lead",
@@ -114,6 +116,7 @@ def test_forward_false_silences_range():
     d.load([{
         "source_identifier": "5678",
         "campaign_id":       None,
+        "app_id":            "com.test.app",
         "enabled":           1,
         "decoder_json": json.dumps([
             {"cv_min": 0, "cv_max": 5, "capi_event": "Spam",
@@ -133,6 +136,7 @@ def test_loader_skips_disabled():
     d.load([{
         "source_identifier": "1234",
         "campaign_id":       None,
+        "app_id":            "com.test.app",
         "enabled":           0,           # disabled
         "decoder_json":      json.dumps([
             {"cv_min": 0, "cv_max": 63, "capi_event": "Purchase",
@@ -147,6 +151,7 @@ def test_loader_falls_back_to_legacy_campaign_id():
     d.load([{
         "source_identifier": None,
         "campaign_id":       42,
+        "app_id":            "com.test.app",
         "enabled":           1,
         "decoder_json":      json.dumps([
             {"cv_min": 0, "cv_max": 63, "capi_event": "Purchase",
@@ -161,13 +166,40 @@ def test_loader_falls_back_to_legacy_campaign_id():
 def test_loader_skips_malformed_rules():
     d = CampaignDecoder()
     d.load([
-        {"source_identifier": "good", "enabled": 1,
+        {"source_identifier": "good", "app_id": "com.test.app", "enabled": 1,
          "decoder_json": json.dumps([
              {"cv_min": 0, "cv_max": 63, "capi_event": "Purchase",
               "forward": True, "currency": "USD"},
          ])},
-        {"source_identifier": "bad", "enabled": 1,
+        {"source_identifier": "bad", "app_id": "com.test.app", "enabled": 1,
          "decoder_json": "{not valid json"},
     ])
-    assert d.has_campaign("good")
-    assert not d.has_campaign("bad")
+    assert d.has_campaign("com.test.app", "good")
+    assert not d.has_campaign("com.test.app", "bad")
+
+
+def test_decoders_are_scoped_per_app_id():
+    d = CampaignDecoder()
+    d.load([
+        {
+            "source_identifier": "1234",
+            "campaign_id": None,
+            "app_id": "com.app.one",
+            "enabled": 1,
+            "decoder_json": json.dumps([
+                {"cv_min": 0, "cv_max": 63, "capi_event": "Lead", "forward": True, "currency": "USD"},
+            ]),
+        },
+        {
+            "source_identifier": "1234",
+            "campaign_id": None,
+            "app_id": "com.app.two",
+            "enabled": 1,
+            "decoder_json": json.dumps([
+                {"cv_min": 0, "cv_max": 63, "capi_event": "Purchase", "forward": True, "currency": "USD"},
+            ]),
+        },
+    ])
+
+    assert d.decode(_pb(cv=10, app_id="com.app.one")).capi_event == "Lead"
+    assert d.decode(_pb(cv=10, app_id="com.app.two")).capi_event == "Purchase"

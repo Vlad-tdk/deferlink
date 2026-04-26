@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from .facebook import FacebookCAPIClient
@@ -49,10 +49,11 @@ class CAPIService:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         cur.execute("""
-            SELECT app_id, platform, pixel_id, access_token,
-                   test_event_code, api_version, enabled
+            SELECT id, app_id, platform, pixel_id, access_token,
+                   test_event_code, api_version, enabled, updated_at
             FROM capi_configs
             WHERE enabled = 1
+            ORDER BY updated_at DESC, id DESC
         """)
         new_cache: Dict[tuple[str, str], CAPIConfig] = {}
         for row in cur.fetchall():
@@ -66,7 +67,16 @@ class CAPIService:
                     api_version     = row["api_version"],
                     enabled         = bool(row["enabled"]),
                 )
-                new_cache[(cfg.app_id, cfg.platform.value)] = cfg
+                cache_key = (cfg.app_id, cfg.platform.value)
+                if cache_key in new_cache:
+                    logger.warning(
+                        "CAPIService: duplicate config for %s/%s ignored (pixel_id=%s)",
+                        cfg.app_id,
+                        cfg.platform.value,
+                        cfg.pixel_id,
+                    )
+                    continue
+                new_cache[cache_key] = cfg
             except Exception as exc:
                 logger.warning("CAPIService: skipping bad config: %s", exc)
 
@@ -243,7 +253,7 @@ class CAPIService:
     ) -> int:
         next_retry: Optional[str] = None
         if not success:
-            next_retry = (datetime.utcnow() + timedelta(seconds=_RETRY_SCHEDULE[0])).strftime(
+            next_retry = (datetime.now(timezone.utc) + timedelta(seconds=_RETRY_SCHEDULE[0])).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
 
@@ -281,7 +291,7 @@ class CAPIService:
         next_retry: Optional[str] = None
         if not success and attempts < _MAX_ATTEMPTS:
             delay = _RETRY_SCHEDULE[min(attempts - 1, len(_RETRY_SCHEDULE) - 1)]
-            next_retry = (datetime.utcnow() + timedelta(seconds=delay)).strftime(
+            next_retry = (datetime.now(timezone.utc) + timedelta(seconds=delay)).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
 

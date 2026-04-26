@@ -138,7 +138,8 @@ public final class SKANManager {
         sessionStartedAt = nil
         guard elapsed > 0 else { return }
 
-        _ = stateStore.update { $0.totalSessionSeconds += elapsed }
+        let state = stateStore.update { $0.totalSessionSeconds += elapsed }
+        Task { await updateConversionValue(state: state, isConversion: false) }
     }
 
     // MARK: - CV submission
@@ -168,12 +169,17 @@ public final class SKANManager {
             return
         }
 
-        await submit(cv: cv)
+        let submitted = await submit(cv: cv)
+        guard submitted else {
+            DeferLinkLogger.log("SKANManager: CV=\(cv) not persisted because StoreKit update failed")
+            return
+        }
+
         _ = stateStore.update { $0.lastCV = cv }
         DeferLinkLogger.log("SKANManager: submitted CV=\(cv)")
     }
 
-    private func submit(cv: Int) async {
+    private func submit(cv: Int) async -> Bool {
         #if canImport(StoreKit)
         if #available(iOS 16.1, *) {
             do {
@@ -188,21 +194,29 @@ public final class SKANManager {
                     coarseValue: coarse,
                     lockWindow:  false
                 )
-                return
+                return true
             } catch {
                 DeferLinkLogger.log("SKANManager: SKAN v4 update failed (\(error)); falling back")
             }
         }
 
         if #available(iOS 15.4, *) {
-            SKAdNetwork.updatePostbackConversionValue(cv) { error in
-                if let error = error {
-                    DeferLinkLogger.log("SKANManager: SKAN v3 update error: \(error)")
+            return await withCheckedContinuation { continuation in
+                SKAdNetwork.updatePostbackConversionValue(cv) { error in
+                    if let error = error {
+                        DeferLinkLogger.log("SKANManager: SKAN v3 update error: \(error)")
+                        continuation.resume(returning: false)
+                    } else {
+                        continuation.resume(returning: true)
+                    }
                 }
             }
         } else if #available(iOS 14.0, *) {
             SKAdNetwork.updateConversionValue(cv)
+            return true
         }
         #endif
+
+        return false
     }
 }

@@ -45,24 +45,13 @@ final class SKANStateStore {
 
     func load() -> SKANState {
         lock.lock(); defer { lock.unlock() }
-
-        if let cached = cache { return cached }
-
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let state = try? JSONDecoder.iso8601.decode(SKANState.self, from: data) else {
-            let fresh = SKANState.initial
-            cache = fresh
-            persist(fresh)
-            return fresh
-        }
-        cache = state
-        return state
+        return loadLocked()
     }
 
     func update(_ transform: (inout SKANState) -> Void) -> SKANState {
         lock.lock(); defer { lock.unlock() }
 
-        var state = cache ?? load()
+        var state = loadLocked()
         transform(&state)
         state.lastUpdate = Date()
         cache = state
@@ -80,6 +69,20 @@ final class SKANStateStore {
     private func persist(_ state: SKANState) {
         guard let data = try? JSONEncoder.iso8601.encode(state) else { return }
         UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+
+    private func loadLocked() -> SKANState {
+        if let cached = cache { return cached }
+
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let state = try? JSONDecoder.iso8601.decode(SKANState.self, from: data) else {
+            let fresh = SKANState.initial
+            cache = fresh
+            persist(fresh)
+            return fresh
+        }
+        cache = state
+        return state
     }
 }
 

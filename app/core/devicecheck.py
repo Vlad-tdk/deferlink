@@ -54,6 +54,7 @@ except ImportError:
 @dataclass
 class DeviceCheckResult:
     valid: bool
+    status: str = "invalid"         # valid | invalid | indeterminate
     reason: str = ""
     is_new_device: bool = False     # Первый раз видим устройство
     bit0: bool = False              # Состояние бита 0 (можно использовать как флаг)
@@ -122,12 +123,11 @@ class DeviceCheckVerifier:
             DeviceCheckResult — результат верификации
         """
         if not device_token_b64:
-            return DeviceCheckResult(valid=False, reason="empty_token")
+            return DeviceCheckResult(valid=False, status="invalid", reason="empty_token")
 
         if not self.configured:
-            # Degraded mode: принимаем токен как "вероятно валидный" без верификации Apple
-            logger.debug("DeviceCheck degraded: токен принят без верификации")
-            return DeviceCheckResult(valid=True, reason="degraded_mode_accepted")
+            logger.info("DeviceCheck degraded: токен не верифицируется, сигнал понижен в доверии")
+            return DeviceCheckResult(valid=False, status="indeterminate", reason="degraded_mode")
 
         try:
             developer_jwt = self._build_developer_jwt()
@@ -155,36 +155,35 @@ class DeviceCheckVerifier:
                 data = resp.json()
                 return DeviceCheckResult(
                     valid=True,
+                    status="valid",
                     bit0=data.get("bit0", False),
                     bit1=data.get("bit1", False),
                     last_update_time=data.get("last_update_time"),
+                    is_new_device=("bit0" not in data and "bit1" not in data),
                 )
-
-            # 200 но с телом "bit0/bit1 not found" = новое устройство, всё равно валидное
-            if resp.status_code == 200:
-                return DeviceCheckResult(valid=True, is_new_device=True)
 
             # 400 — невалидный токен (или истёк)
             if resp.status_code == 400:
                 return DeviceCheckResult(
                     valid=False,
+                    status="invalid",
                     reason=f"apple_rejected: {resp.text[:120]}"
                 )
 
             logger.warning("DeviceCheck API вернул %s: %s", resp.status_code, resp.text[:200])
             return DeviceCheckResult(
                 valid=False,
+                status="indeterminate",
                 reason=f"api_error_{resp.status_code}"
             )
 
         except httpx.TimeoutException:
             logger.warning("DeviceCheck: таймаут запроса к Apple API")
-            # При таймауте не блокируем — принимаем как валидный
-            return DeviceCheckResult(valid=True, reason="timeout_accepted")
+            return DeviceCheckResult(valid=False, status="indeterminate", reason="timeout")
 
         except Exception as e:
             logger.error("DeviceCheck: неожиданная ошибка: %s", e)
-            return DeviceCheckResult(valid=True, reason=f"error_accepted: {e}")
+            return DeviceCheckResult(valid=False, status="indeterminate", reason=f"error: {e}")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Утилиты

@@ -43,8 +43,8 @@ class CampaignDecoder:
     __slots__ = ("_by_key", "_default_schema")
 
     def __init__(self) -> None:
-        # campaign_key (str) → ordered list of rules
-        self._by_key: Dict[str, List[DecoderRule]] = {}
+        # (app_id, campaign_key) → ordered list of rules
+        self._by_key: Dict[tuple[str, str], List[DecoderRule]] = {}
         # Fallback schema used when decoder needs to compute revenue midpoint
         self._default_schema = CVSchema(SKANConfig(app_id="__default__"))
 
@@ -57,32 +57,33 @@ class CampaignDecoder:
         Each row must contain 'source_identifier' or 'campaign_id' plus
         'decoder_json' (a JSON list of rules). Disabled rows are skipped.
         """
-        new_map: Dict[str, List[DecoderRule]] = {}
+        new_map: Dict[tuple[str, str], List[DecoderRule]] = {}
         for row in rows:
             if not row.get("enabled"):
                 continue
 
-            key = row.get("source_identifier") or (
+            campaign_key = row.get("source_identifier") or (
                 str(row["campaign_id"]) if row.get("campaign_id") is not None else None
             )
-            if not key:
+            app_id = row.get("app_id")
+            if not app_id or not campaign_key:
                 continue
 
             try:
                 rules_data = json.loads(row["decoder_json"])
                 rules = [DecoderRule(**r) for r in rules_data]
-                new_map[key] = rules
+                new_map[(str(app_id), str(campaign_key))] = rules
             except Exception as exc:
                 logger.warning(
-                    "CampaignDecoder: skipping bad decoder for %s: %s",
-                    key, exc,
+                    "CampaignDecoder: skipping bad decoder for %s/%s: %s",
+                    app_id, campaign_key, exc,
                 )
 
         self._by_key = new_map
         logger.info("CampaignDecoder: loaded %d decoders", len(new_map))
 
-    def has_campaign(self, campaign_key: str) -> bool:
-        return campaign_key in self._by_key
+    def has_campaign(self, app_id: str, campaign_key: str) -> bool:
+        return (app_id, campaign_key) in self._by_key
 
     # ── Decoding ─────────────────────────────────────────────────────────────
 
@@ -107,11 +108,11 @@ class CampaignDecoder:
         if cv is None:
             return None
 
-        key = pb.campaign_key
-        if not key:
+        campaign_key = pb.campaign_key
+        if not pb.app_id or not campaign_key:
             return None
 
-        rules = self._by_key.get(key)
+        rules = self._by_key.get((pb.app_id, campaign_key))
         if not rules:
             return None
 

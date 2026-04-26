@@ -9,11 +9,15 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import pytest
 import httpx
 
+from fastapi import HTTPException
+
+from app.api import capi_admin
 from app.core.capi.facebook import FacebookCAPIClient
 from app.core.capi.models import (
     CAPIConfig,
@@ -270,3 +274,63 @@ async def test_retry_gives_up_after_max_attempts(conn, capi_config_row):
     assert row["attempts"] == 3
     assert row["succeeded"] == 0
     assert row["next_retry_at"] is None
+
+
+def test_load_configs_prefers_latest_duplicate_app_platform(conn):
+    conn.execute(
+        """
+        INSERT INTO capi_configs (
+            app_id, platform, pixel_id, access_token, api_version, enabled, description, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?)
+        """,
+        ("dup.app", "facebook", "PIXEL_OLD", "TOKEN_old", "v21.0", 1, "", "2026-01-01 00:00:00"),
+    )
+    conn.execute(
+        """
+        INSERT INTO capi_configs (
+            app_id, platform, pixel_id, access_token, api_version, enabled, description, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?)
+        """,
+        ("dup.app", "facebook", "PIXEL_NEW", "TOKEN_new", "v21.0", 1, "", "2026-02-01 00:00:00"),
+    )
+    conn.commit()
+
+    svc = CAPIService()
+    svc.load_configs(conn)
+    cfg = svc.get_config("dup.app", CAPIPlatform.FACEBOOK)
+
+    assert cfg is not None
+    assert cfg.pixel_id == "PIXEL_NEW"
+    assert cfg.access_token == "TOKEN_new"
+
+
+def test_create_config_rejects_second_app_platform_config(conn, monkeypatch):
+    @contextmanager
+    def fake_connection():
+        yield conn
+
+    monkeypatch.setattr(capi_admin.db_manager, "get_connection", fake_connection)
+    load_calls: list[bool] = []
+    monkeypatch.setattr(capi_admin.capi_service, "load_configs", lambda db_conn: load_calls.append(True))
+
+    body = capi_admin.CAPIConfigCreate(
+        app_id="dup.app",
+        platform="facebook",
+        pixel_id="PIXEL_1",
+        access_token="TOKEN_1234567890",
+    )
+    created = capi_admin.create_config(body)
+    assert created["success"] is True
+    assert load_calls == [True]
+
+    with pytest.raises(HTTPException) as exc:
+        capi_admin.create_config(
+            capi_admin.CAPIConfigCreate(
+                app_id="dup.app",
+                platform="facebook",
+                pixel_id="PIXEL_2",
+                access_token="TOKEN_0987654321",
+            )
+        )
+
+    assert exc.value.status_code == 409

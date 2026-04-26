@@ -4,10 +4,13 @@ Utility functions for DeferLink system
 """
 
 import hashlib
+import html
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional, Any
 from fastapi import Request
+
+from .config import Config
 
 
 def detect_mobile_browser(user_agent: str) -> bool:
@@ -221,12 +224,16 @@ def calculate_session_lifetime_hours(created_at: str, resolved_at: Optional[str]
     """Вычисление времени жизни сессии в часах"""
     try:
         created = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
 
         if resolved_at:
             resolved = datetime.fromisoformat(resolved_at.replace('Z', '+00:00'))
+            if resolved.tzinfo is None:
+                resolved = resolved.replace(tzinfo=timezone.utc)
             delta = resolved - created
         else:
-            delta = datetime.now() - created
+            delta = datetime.now(timezone.utc) - created
 
         return delta.total_seconds() / 3600  # Часы
 
@@ -236,6 +243,8 @@ def calculate_session_lifetime_hours(created_at: str, resolved_at: Optional[str]
 
 def generate_instruction_page(domain: str, promo_id: str) -> str:
     """Генерация HTML страницы с инструкциями"""
+    safe_domain = html.escape(domain, quote=True)
+    safe_promo_id = html.escape(promo_id, quote=True)
     return f"""
     <!DOCTYPE html>
     <html lang="ru">
@@ -348,8 +357,8 @@ def generate_instruction_page(domain: str, promo_id: str) -> str:
             </div>
 
             <div class="promo">
-                <strong>Промо-код:</strong> {promo_id}<br>
-                <strong>Домен:</strong> {domain}
+                <strong>Промо-код:</strong> {safe_promo_id}<br>
+                <strong>Домен:</strong> {safe_domain}
             </div>
         </div>
     </body>
@@ -359,6 +368,11 @@ def generate_instruction_page(domain: str, promo_id: str) -> str:
 
 def get_client_ip(request: Request) -> str:
     """Получение IP адреса клиента"""
+    if not Config.TRUST_PROXY_HEADERS:
+        if request.client and request.client.host:
+            return request.client.host
+        return "unknown"
+
     # Проверка заголовков прокси
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:

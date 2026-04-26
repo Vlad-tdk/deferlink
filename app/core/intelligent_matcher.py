@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
@@ -549,11 +549,14 @@ class IntelligentMatcher:
                     created_at = datetime.fromisoformat(str(created_at_str).replace('Z', '+00:00'))
                 else:
                     created_at = datetime.strptime(str(created_at_str), '%Y-%m-%d %H:%M:%S')
+                    created_at = created_at.replace(tzinfo=timezone.utc)
             except:
                 return 0.8
 
             # Текущее время (время resolve)
-            current_time = datetime.now()
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            current_time = datetime.now(timezone.utc)
             time_diff = (current_time - created_at).total_seconds()
 
             # Анализ временных паттернов
@@ -581,7 +584,7 @@ class IntelligentMatcher:
         base_threshold = self.confidence_thresholds['medium']  # 0.70
 
         # Корректировки на основе времени
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(timezone.utc).hour
         if 9 <= current_hour <= 21:  # Рабочие часы - более строго
             base_threshold += 0.05
         else:  # Нерабочие часы - более мягко

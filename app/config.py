@@ -48,6 +48,9 @@ class Config:
         origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",")
     ]
 
+    # Reverse proxy / client IP
+    TRUST_PROXY_HEADERS: bool = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+
     # Monitoring
     ENABLE_METRICS: bool = os.getenv("ENABLE_METRICS", "false").lower() == "true"
     METRICS_PORT: int = int(os.getenv("METRICS_PORT", "9090"))
@@ -67,6 +70,9 @@ class Config:
 
     # Algorithm optimization
     AUTO_OPTIMIZE_WEIGHTS: bool = os.getenv("AUTO_OPTIMIZE_WEIGHTS", "false").lower() == "true"
+
+    # CAPI retry worker
+    CAPI_RETRY_INTERVAL_SECONDS: int = int(os.getenv("CAPI_RETRY_INTERVAL_SECONDS", "60"))
 
     # Environment detection
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development").lower()
@@ -138,6 +144,9 @@ class Config:
 
         if cls.FRAUD_RISK_THRESHOLD < 0.0 or cls.FRAUD_RISK_THRESHOLD > 1.0:
             raise ValueError("FRAUD_RISK_THRESHOLD must be between 0.0 and 1.0")
+
+        if cls.CAPI_RETRY_INTERVAL_SECONDS <= 0:
+            raise ValueError("CAPI_RETRY_INTERVAL_SECONDS must be greater than 0")
 
         return True
 

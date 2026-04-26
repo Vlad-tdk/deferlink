@@ -3,12 +3,15 @@ Deep link API endpoints
 Эндпоинты API для диплинков
 """
 
+import html
 import logging
 from typing import Dict, Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 
+from ..config import Config
+from ..core import devicecheck as dc_module
 from ..models import ResolveRequest, ResolveResponse
 
 logger = logging.getLogger(__name__)
@@ -22,6 +25,15 @@ def set_deeplink_handler(handler):
     """Установка обработчика диплинков из main.py"""
     global deeplink_handler
     deeplink_handler = handler
+
+
+def _copy_fingerprint_without_devicecheck(resolve_request: ResolveRequest) -> ResolveRequest:
+    try:
+        fingerprint = resolve_request.fingerprint.model_copy(update={"device_check_token": None})
+        return resolve_request.model_copy(update={"fingerprint": fingerprint})
+    except AttributeError:
+        fingerprint = resolve_request.fingerprint.copy(update={"device_check_token": None})
+        return resolve_request.copy(update={"fingerprint": fingerprint})
 
 
 @router.post("/session", status_code=status.HTTP_201_CREATED)
@@ -64,28 +76,38 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 detail="Handler not initialized"
             )
 
-        # Поиск подходящей сессии
-        matching_session = deeplink_handler.find_matching_session(request.fingerprint)
+        prepared_request = request
+        verified_devicecheck_token = None
+        token = request.fingerprint.device_check_token
+        if token and Config.DEVICECHECK_ENABLED:
+            verification = await dc_module.get_verifier().verify(token)
+            if verification.status == "valid":
+                verified_devicecheck_token = token
+            else:
+                logger.info(
+                    "DeviceCheck token not trusted for API resolve: status=%s reason=%s",
+                    verification.status,
+                    verification.reason,
+                )
+                prepared_request = _copy_fingerprint_without_devicecheck(request)
+
+        matching_session = deeplink_handler.resolve_matching_session(
+            prepared_request.fingerprint,
+            device_check_token_b64=verified_devicecheck_token,
+        )
 
         if matching_session:
             confidence_score = matching_session.get('match_confidence', 0.0)
             match_details    = matching_session.get('match_details', {})
             match_method     = matching_session.get('match_method') or (match_details or {}).get('method')
 
-            deeplink_handler.mark_session_resolved(
-                session_id=matching_session['session_id'],
-                confidence_score=confidence_score,
-                match_details=match_details,
-                device_check_token_b64=request.fingerprint.device_check_token,
-            )
-
             return ResolveResponse(
                 success=True,
                 promo_id=matching_session.get('promo_id'),
                 domain=matching_session.get('domain'),
                 session_id=matching_session['session_id'],
-                redirect_url=request.fallback_url,
-                app_url=request.app_scheme,
+                redirect_url=prepared_request.fallback_url,
+                app_url=prepared_request.app_scheme,
                 matched=True,
                 match_method=match_method,
                 message="Сессия успешно разрешена"
@@ -96,8 +118,8 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 promo_id=None,
                 domain=None,
                 session_id=None,
-                redirect_url=request.fallback_url,
-                app_url=request.app_scheme,
+                redirect_url=prepared_request.fallback_url,
+                app_url=prepared_request.app_scheme,
                 matched=False,
                 match_method=None,
                 message="Подходящая сессия не найдена"
@@ -114,6 +136,7 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
 @router.get("/instruction/{session_id}")
 async def get_instruction_page(session_id: str) -> HTMLResponse:
     """Страница с инструкциями"""
+    safe_session_id = html.escape(session_id, quote=True)
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -151,7 +174,7 @@ async def get_instruction_page(session_id: str) -> HTMLResponse:
     <body>
         <div class="container">
             <h1>📱 Open App</h1>
-            <p>Session ID: {session_id}</p>
+            <p>Session ID: {safe_session_id}</p>
             <p>Please open the application on your device to continue.</p>
         </div>
     </body>

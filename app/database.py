@@ -13,6 +13,80 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 
+_REQUIRED_TABLES = {
+    "deeplink_sessions",
+    "analytics_events",
+    "user_events",
+    "cloaking_ip_rules",
+    "cloaking_ua_rules",
+    "cloaking_decisions_log",
+    "skan_postbacks",
+    "skan_cv_configs",
+    "skan_campaign_decoders",
+    "skan_cv_distribution",
+    "capi_configs",
+    "capi_delivery_log",
+}
+
+_REQUIRED_COLUMNS = {
+    "deeplink_sessions": {
+        "session_id",
+        "promo_id",
+        "domain",
+        "user_agent",
+        "timezone",
+        "language",
+        "screen_size",
+        "model",
+        "created_at",
+        "expires_at",
+        "is_resolved",
+        "resolved_at",
+        "ip_address",
+        "match_confidence",
+        "match_details",
+        "updated_at",
+        "source_context",
+        "device_check_token_hash",
+        "match_method",
+    },
+    "user_events": {"event_id", "event_name", "timestamp", "received_at"},
+    "cloaking_ip_rules": {"id", "visitor_type", "confidence", "enabled"},
+    "cloaking_ua_rules": {"id", "pattern", "visitor_type", "confidence", "enabled"},
+    "cloaking_decisions_log": {"id", "ip", "visitor_type", "action", "confidence", "timestamp"},
+    "skan_postbacks": {"id", "transaction_id", "app_id", "received_at", "capi_forwarded"},
+    "skan_cv_configs": {"app_id", "schema_version", "revenue_buckets_json"},
+    "skan_campaign_decoders": {"id", "app_id", "decoder_json", "enabled"},
+    "skan_cv_distribution": {"date", "app_id", "conversion_value", "postback_count"},
+    "capi_configs": {"id", "app_id", "platform", "pixel_id", "access_token", "enabled"},
+    "capi_delivery_log": {"id", "app_id", "platform", "event_id", "succeeded", "next_retry_at"},
+}
+
+
+def assert_required_schema(db_path: Optional[str] = None) -> None:
+    """Fail fast if the runtime schema is missing required tables/columns."""
+    actual_db_path = db_path or Config.DATABASE_PATH
+    conn = sqlite3.connect(actual_db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+
+        missing_tables = sorted(_REQUIRED_TABLES - tables)
+        if missing_tables:
+            raise RuntimeError(f"Missing required tables: {', '.join(missing_tables)}")
+
+        for table_name, required_columns in _REQUIRED_COLUMNS.items():
+            cur.execute(f"PRAGMA table_info({table_name})")
+            existing_columns = {row[1] for row in cur.fetchall()}
+            missing_columns = sorted(required_columns - existing_columns)
+            if missing_columns:
+                raise RuntimeError(
+                    f"Missing required columns in {table_name}: {', '.join(missing_columns)}"
+                )
+    finally:
+        conn.close()
+
 
 def init_database(db_path: Optional[str] = None) -> None:
     """Инициализация базы данных с поддержкой миграций"""
@@ -99,31 +173,39 @@ def init_database(db_path: Optional[str] = None) -> None:
         from .migrations.add_devicecheck_fields import run as run_dc_migration
         run_dc_migration(actual_db_path)
     except Exception as e:
-        logger.warning("Миграция add_devicecheck_fields не применена: %s", e)
+        raise RuntimeError("Required migration add_devicecheck_fields failed") from e
 
     try:
         from .migrations.add_events_table import run as run_events_migration
         run_events_migration(actual_db_path)
     except Exception as e:
-        logger.warning("Миграция add_events_table не применена: %s", e)
+        raise RuntimeError("Required migration add_events_table failed") from e
 
     try:
         from .migrations.add_cloaking_tables import run as run_cloaking_migration
         run_cloaking_migration(actual_db_path)
     except Exception as e:
-        logger.warning("Миграция add_cloaking_tables не применена: %s", e)
+        raise RuntimeError("Required migration add_cloaking_tables failed") from e
 
     try:
         from .migrations.add_skadnetwork_tables import run as run_skan_migration
         run_skan_migration(actual_db_path)
     except Exception as e:
-        logger.warning("Миграция add_skadnetwork_tables не применена: %s", e)
+        raise RuntimeError("Required migration add_skadnetwork_tables failed") from e
 
     try:
         from .migrations.add_capi_tables import run as run_capi_migration
         run_capi_migration(actual_db_path)
     except Exception as e:
-        logger.warning("Миграция add_capi_tables не применена: %s", e)
+        raise RuntimeError("Required migration add_capi_tables failed") from e
+
+    try:
+        from .migrations.enforce_capi_unique_app_platform import run as run_capi_unique_migration
+        run_capi_unique_migration(actual_db_path)
+    except Exception as e:
+        raise RuntimeError("Required migration enforce_capi_unique_app_platform failed") from e
+
+    assert_required_schema(actual_db_path)
 
 
 class DatabaseManager:
