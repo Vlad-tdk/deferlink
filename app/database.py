@@ -207,6 +207,12 @@ def init_database(db_path: Optional[str] = None) -> None:
 
     assert_required_schema(actual_db_path)
 
+    try:
+        from .migrations.add_cloaking_tables import run as run_cloaking_migration
+        run_cloaking_migration(actual_db_path)
+    except Exception as e:
+        logger.warning("Миграция add_cloaking_tables не применена: %s", e)
+
 
 class DatabaseManager:
     """Менеджер для работы с базой данных"""

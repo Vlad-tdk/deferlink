@@ -164,25 +164,6 @@ async def startup_tasks():
     init_database()
     logger.info("База данных инициализирована")
 
-    # Инициализация CloakingEngine
-    init_engine()
-    # Загружаем кастомные правила из БД (builtin rules уже загружены в __init__)
-    try:
-        from .api.cloaking_admin import _load_all_rules
-        _load_all_rules()
-        logger.info("CloakingEngine инициализирован")
-    except Exception as e:
-        logger.warning("CloakingEngine: ошибка загрузки правил из БД: %s", e)
-
-    # Инициализация SKAdNetwork + CAPI
-    try:
-        with db_manager.get_connection() as _conn:
-            skan_service.load_rules(_conn)
-            capi_service.load_configs(_conn)
-        logger.info("SKAdNetwork + CAPI сервисы инициализированы")
-    except Exception as e:
-        logger.warning("SKAN/CAPI: ошибка загрузки правил из БД: %s", e)
-
     # Инициализация DeviceCheck верификатора
     if Config.DEVICECHECK_ENABLED:
         dc_module.init_verifier(
@@ -275,9 +256,6 @@ app.include_router(deeplinks.router)
 app.include_router(health.router)
 app.include_router(stats.router)
 app.include_router(events_api.router)
-app.include_router(cloaking_admin.router)
-app.include_router(skadnetwork_api.router)
-app.include_router(capi_admin.router)
 
 # ── Admin UI (static SPA) ─────────────────────────────────────────────────────
 # Plain HTML/CSS/JS — no build step. Served at /admin/.
@@ -653,62 +631,6 @@ async def log_requests(request: Request, call_next):
     )
 
     return response
-
-
-# ── Cloaking page builders ────────────────────────────────────────────────────
-
-def _build_seo_page(promo_id: str, domain: str) -> str:
-    """OG/meta-tags landing page for search engine crawlers."""
-    app_name  = html.escape(Config.APP_NAME or domain, quote=True)
-    safe_domain = html.escape(domain, quote=True)
-    safe_promo_id = html.escape(promo_id, quote=True)
-    store_id  = Config.APP_STORE_ID or ""
-    store_url = f"https://apps.apple.com/app/id{store_id}" if store_id else "https://apps.apple.com"
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{app_name} — Download</title>
-  <meta name="description" content="Download {app_name} and get exclusive access with promo {safe_promo_id}.">
-  <meta property="og:title"       content="{app_name}">
-  <meta property="og:description" content="Download {app_name} — exclusive promo {safe_promo_id}">
-  <meta property="og:type"        content="website">
-  <meta property="og:url"         content="https://{safe_domain}">
-  <meta name="twitter:card"       content="summary">
-  <meta name="twitter:title"      content="{app_name}">
-  <link rel="canonical" href="https://{safe_domain}">
-</head>
-<body>
-  <h1>{app_name}</h1>
-  <p>Download the app to get exclusive access.</p>
-  <a href="{store_url}">Download on the App Store</a>
-</body>
-</html>"""
-
-
-def _build_compliant_page(promo_id: str, domain: str) -> str:
-    """Clean, policy-compliant landing for ad network reviewers."""
-    app_name = html.escape(Config.APP_NAME or domain, quote=True)
-    store_id  = Config.APP_STORE_ID or ""
-    store_url = f"https://apps.apple.com/app/id{store_id}" if store_id else "https://apps.apple.com"
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{app_name}</title>
-</head>
-<body style="font-family:sans-serif;max-width:600px;margin:60px auto;text-align:center">
-  <h1>{app_name}</h1>
-  <p>Special offer — download the app now.</p>
-  <a href="{store_url}"
-     style="display:inline-block;padding:14px 32px;background:#000;color:#fff;
-            border-radius:8px;text-decoration:none;font-size:16px">
-    Download on the App Store
-  </a>
-</body>
-</html>"""
 
 
 if __name__ == "__main__":
