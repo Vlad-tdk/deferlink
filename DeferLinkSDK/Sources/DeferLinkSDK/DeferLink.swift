@@ -37,6 +37,7 @@ public final class DeferLink: NSObject {
     private var client:               DeferLinkClient?
     private var fingerprintCollector: FingerprintCollector?
     private var eventTracker:         EventTracker?
+    private var skanManager:          SKANManager?
 
     private var safariVC:         SFSafariViewController?
     private var safariContinuation: CheckedContinuation<String?, Never>?
@@ -273,6 +274,38 @@ public final class DeferLink: NSObject {
     /// Manually flush all buffered events now (e.g. before process exit in tests).
     public func flushEvents() {
         eventTracker?.flush()
+    }
+
+    // MARK: - SKAdNetwork
+
+    /// Enable SKAdNetwork conversion-value tracking for the given iTunes app id.
+    ///
+    /// Must be called once after `configure(...)`. Triggers a background
+    /// fetch of the per-app CV config and starts session tracking. Safe to
+    /// call multiple times — subsequent calls are no-ops.
+    @MainActor
+    public func enableSKAdNetwork(appId: String) {
+        guard ensureConfigured(), let client = client else { return }
+        guard skanManager == nil else { return }
+        skanManager = SKANManager(appId: appId, client: client)
+        DeferLinkLogger.debug("SKAdNetwork enabled for appId=\(appId)")
+    }
+
+    /// Mark a meaningful in-app action that contributes to the engagement
+    /// tier in the SKAdNetwork conversion value (e.g. registration_qualified,
+    /// onboarding_completed, key_feature_used).
+    ///
+    /// No-op if SKAdNetwork hasn't been enabled.
+    @MainActor
+    public func markSKANCoreAction() {
+        skanManager?.markCoreAction()
+    }
+
+    /// Record revenue for SKAdNetwork CV computation (in addition to logEvent).
+    /// Combined revenue across the conversion window is bucketed log-scale.
+    @MainActor
+    public func recordSKANRevenue(_ usd: Double, currency: String = "USD") {
+        skanManager?.recordRevenue(usd, currency: currency)
     }
 
     // MARK: - Utilities

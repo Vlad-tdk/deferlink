@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # ИМПОРТЫ
 from .config import Config
@@ -21,6 +22,10 @@ from .models import ResolveRequest, ResolveResponse
 from .utils import detect_ios_device, generate_instruction_page, get_client_ip
 from .api import deeplinks, health, stats, events as events_api
 from .api import cloaking_admin
+from .api import skadnetwork as skadnetwork_api
+from .api import capi_admin
+from .core.skadnetwork import skan_service
+from .core.capi import capi_service
 from .core.iab_detector import detect_browser, should_escape_to_safari, EscapeStrategy
 from .core.safari_escape import generate_escape_page, build_app_store_url
 from .core import devicecheck as dc_module
@@ -121,6 +126,15 @@ async def startup_tasks():
     except Exception as e:
         logger.warning("CloakingEngine: ошибка загрузки правил из БД: %s", e)
 
+    # Инициализация SKAdNetwork + CAPI
+    try:
+        with db_manager.get_connection() as _conn:
+            skan_service.load_rules(_conn)
+            capi_service.load_configs(_conn)
+        logger.info("SKAdNetwork + CAPI сервисы инициализированы")
+    except Exception as e:
+        logger.warning("SKAN/CAPI: ошибка загрузки правил из БД: %s", e)
+
     # Инициализация DeviceCheck верификатора
     if Config.DEVICECHECK_ENABLED:
         dc_module.init_verifier(
@@ -205,6 +219,17 @@ app.include_router(health.router)
 app.include_router(stats.router)
 app.include_router(events_api.router)
 app.include_router(cloaking_admin.router)
+app.include_router(skadnetwork_api.router)
+app.include_router(capi_admin.router)
+
+# ── Admin UI (static SPA) ─────────────────────────────────────────────────────
+# Plain HTML/CSS/JS — no build step. Served at /admin/.
+# IMPORTANT: protect with reverse-proxy basic auth or VPN in production —
+# the UI talks to the same admin APIs that have no auth of their own.
+import os as _os
+_admin_dir = _os.path.join(_os.path.dirname(__file__), "web")
+if _os.path.isdir(_admin_dir):
+    app.mount("/admin", StaticFiles(directory=_admin_dir, html=True), name="admin")
 
 
 # Обработчик ошибок

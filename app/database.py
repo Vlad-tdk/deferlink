@@ -113,6 +113,18 @@ def init_database(db_path: Optional[str] = None) -> None:
     except Exception as e:
         logger.warning("Миграция add_cloaking_tables не применена: %s", e)
 
+    try:
+        from .migrations.add_skadnetwork_tables import run as run_skan_migration
+        run_skan_migration(actual_db_path)
+    except Exception as e:
+        logger.warning("Миграция add_skadnetwork_tables не применена: %s", e)
+
+    try:
+        from .migrations.add_capi_tables import run as run_capi_migration
+        run_capi_migration(actual_db_path)
+    except Exception as e:
+        logger.warning("Миграция add_capi_tables не применена: %s", e)
+
 
 class DatabaseManager:
     """Менеджер для работы с базой данных"""

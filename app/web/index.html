@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeferLink Admin</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">
+    <span class="brand-mark">◆</span>
+    <span class="brand-name">DeferLink</span>
+  </div>
+  <nav class="nav">
+    <a href="#dashboard"      class="nav-item" data-section="dashboard">Overview</a>
+    <div class="nav-group">Cloaking</div>
+    <a href="#cloak-ip"       class="nav-item" data-section="cloak-ip">IP&nbsp;rules</a>
+    <a href="#cloak-ua"       class="nav-item" data-section="cloak-ua">UA&nbsp;rules</a>
+    <a href="#cloak-test"     class="nav-item" data-section="cloak-test">Test&nbsp;decision</a>
+    <a href="#cloak-log"      class="nav-item" data-section="cloak-log">Decision&nbsp;log</a>
+    <div class="nav-group">SKAdNetwork</div>
+    <a href="#skan-postbacks" class="nav-item" data-section="skan-postbacks">Postbacks</a>
+    <a href="#skan-decoders"  class="nav-item" data-section="skan-decoders">Decoders</a>
+    <a href="#skan-config"    class="nav-item" data-section="skan-config">CV&nbsp;config</a>
+    <a href="#skan-stats"     class="nav-item" data-section="skan-stats">CV&nbsp;distribution</a>
+    <div class="nav-group">CAPI</div>
+    <a href="#capi-configs"   class="nav-item" data-section="capi-configs">Configs</a>
+    <a href="#capi-log"       class="nav-item" data-section="capi-log">Delivery&nbsp;log</a>
+    <a href="#capi-test"      class="nav-item" data-section="capi-test">Test&nbsp;event</a>
+  </nav>
+  <div class="sidebar-footer">
+    <span id="health-indicator" class="dot dot-pending"></span>
+    <span id="health-text">checking…</span>
+  </div>
+</aside>
+
+<main class="main">
+
+  <!-- ─── Overview ──────────────────────────────────────────────────────── -->
+  <section id="section-dashboard" class="section">
+    <h1>Overview</h1>
+    <div class="stat-grid" id="overview-stats">
+      <div class="stat-card"><div class="stat-label">Decisions (7d)</div><div class="stat-value" id="ov-decisions">—</div></div>
+      <div class="stat-card"><div class="stat-label">Bots blocked</div><div class="stat-value" id="ov-bots">—</div></div>
+      <div class="stat-card"><div class="stat-label">SKAN postbacks</div><div class="stat-value" id="ov-postbacks">—</div></div>
+      <div class="stat-card"><div class="stat-label">CAPI deliveries</div><div class="stat-value" id="ov-capi">—</div></div>
+    </div>
+    <h2>Cloaking breakdown (last 7d)</h2>
+    <table class="data-table" id="ov-cloak-table">
+      <thead><tr><th>Visitor type</th><th>Action</th><th>Count</th><th>Avg conf.</th><th>Unique IPs</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── Cloaking IP rules ────────────────────────────────────────────── -->
+  <section id="section-cloak-ip" class="section">
+    <div class="section-header">
+      <h1>Cloaking · IP rules</h1>
+      <button class="btn btn-primary" data-modal="modal-ip-rule">+ Add rule</button>
+    </div>
+    <table class="data-table" id="ip-rules-table">
+      <thead><tr>
+        <th>ID</th><th>Match</th><th>Visitor type</th><th>Conf.</th>
+        <th>Description</th><th>Enabled</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── Cloaking UA rules ────────────────────────────────────────────── -->
+  <section id="section-cloak-ua" class="section">
+    <div class="section-header">
+      <h1>Cloaking · UA rules</h1>
+      <button class="btn btn-primary" data-modal="modal-ua-rule">+ Add rule</button>
+    </div>
+    <table class="data-table" id="ua-rules-table">
+      <thead><tr>
+        <th>ID</th><th>Pattern</th><th>Visitor type</th><th>Conf.</th>
+        <th>Description</th><th>Enabled</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── Cloaking test ────────────────────────────────────────────────── -->
+  <section id="section-cloak-test" class="section">
+    <h1>Cloaking · Test decision</h1>
+    <p class="hint">Run the engine against a given IP / UA without sending real traffic.</p>
+    <form id="cloak-test-form" class="form-card">
+      <label>IP address<input name="ip" placeholder="66.249.64.1" required></label>
+      <label>User-Agent<input name="user_agent" placeholder="Mozilla/5.0 (compatible; Googlebot/2.1; ...)" required></label>
+      <label>Headers (JSON, optional)<textarea name="headers" rows="3" placeholder='{"accept-language":"en-US"}'></textarea></label>
+      <button class="btn btn-primary" type="submit">Run</button>
+    </form>
+    <div id="cloak-test-result" class="result-card" hidden></div>
+  </section>
+
+  <!-- ─── Cloaking log ─────────────────────────────────────────────────── -->
+  <section id="section-cloak-log" class="section">
+    <div class="section-header">
+      <h1>Cloaking · Decision log</h1>
+      <div class="filter-bar">
+        <select id="cloak-log-type">
+          <option value="">All visitor types</option>
+          <option value="bot">bot</option>
+          <option value="ad_review">ad_review</option>
+          <option value="suspicious">suspicious</option>
+          <option value="real_user">real_user</option>
+        </select>
+        <button class="btn" id="cloak-log-refresh">Refresh</button>
+      </div>
+    </div>
+    <table class="data-table" id="cloak-log-table">
+      <thead><tr>
+        <th>Time</th><th>IP</th><th>UA</th><th>Type</th><th>Action</th><th>Conf.</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── SKAN postbacks ───────────────────────────────────────────────── -->
+  <section id="section-skan-postbacks" class="section">
+    <div class="section-header">
+      <h1>SKAN · Postbacks</h1>
+      <div class="filter-bar">
+        <input id="skan-pb-app" placeholder="app_id">
+        <select id="skan-pb-seq">
+          <option value="">All windows</option>
+          <option value="0">PB1 (0–2d)</option>
+          <option value="1">PB2 (3–7d)</option>
+          <option value="2">PB3 (8–35d)</option>
+        </select>
+        <button class="btn" id="skan-pb-refresh">Refresh</button>
+      </div>
+    </div>
+    <table class="data-table" id="skan-pb-table">
+      <thead><tr>
+        <th>Received</th><th>App</th><th>Source ID</th><th>TX</th>
+        <th>Window</th><th>CV</th><th>Coarse</th><th>Sig</th><th>CAPI</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── SKAN decoders ────────────────────────────────────────────────── -->
+  <section id="section-skan-decoders" class="section">
+    <div class="section-header">
+      <h1>SKAN · Campaign decoders</h1>
+      <button class="btn btn-primary" data-modal="modal-decoder">+ New decoder</button>
+    </div>
+    <p class="hint">Each decoder maps CV ranges (0–63) to CAPI events for a given campaign. First matching rule wins.</p>
+    <table class="data-table" id="skan-decoders-table">
+      <thead><tr>
+        <th>ID</th><th>App</th><th>Source ID</th><th>Campaign ID</th>
+        <th>Rules</th><th>Description</th><th>Enabled</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── SKAN CV config ───────────────────────────────────────────────── -->
+  <section id="section-skan-config" class="section">
+    <h1>SKAN · CV encoding config</h1>
+    <p class="hint">Per-app revenue buckets and engagement thresholds. SDK polls this on launch.</p>
+    <form id="skan-config-form" class="form-card form-card-wide">
+      <label>App ID<input name="app_id" required placeholder="123456789"></label>
+      <button type="button" class="btn" id="skan-config-load">Load existing</button>
+
+      <div class="form-section-title">Revenue buckets (USD floors, 8 ascending values)</div>
+      <div class="bucket-grid">
+        <label>0<input name="b0" type="number" step="0.01" value="0"></label>
+        <label>1<input name="b1" type="number" step="0.01" value="0.01"></label>
+        <label>2<input name="b2" type="number" step="0.01" value="1"></label>
+        <label>3<input name="b3" type="number" step="0.01" value="5"></label>
+        <label>4<input name="b4" type="number" step="0.01" value="20"></label>
+        <label>5<input name="b5" type="number" step="0.01" value="50"></label>
+        <label>6<input name="b6" type="number" step="0.01" value="100"></label>
+        <label>7<input name="b7" type="number" step="0.01" value="300"></label>
+      </div>
+
+      <div class="form-section-title">Engagement thresholds</div>
+      <div class="form-grid">
+        <label>bounce_max_seconds<input name="bounce_max_seconds" type="number" value="30"></label>
+        <label>active_min_sessions<input name="active_min_sessions" type="number" value="2"></label>
+        <label>deep_min_sessions<input name="deep_min_sessions" type="number" value="5"></label>
+        <label>deep_min_core_actions<input name="deep_min_core_actions" type="number" value="1"></label>
+        <label>conversion_window_hours<input name="conversion_window_hours" type="number" value="48"></label>
+        <label>cache_ttl_seconds<input name="cache_ttl_seconds" type="number" value="86400"></label>
+      </div>
+      <label class="checkbox-row">
+        <input type="checkbox" name="power_requires_retention" checked>
+        Power tier requires retention (d1 + d2)
+      </label>
+
+      <button class="btn btn-primary" type="submit">Save config</button>
+    </form>
+  </section>
+
+  <!-- ─── SKAN CV distribution ─────────────────────────────────────────── -->
+  <section id="section-skan-stats" class="section">
+    <div class="section-header">
+      <h1>SKAN · CV distribution</h1>
+      <div class="filter-bar">
+        <input id="skan-stats-app" placeholder="app_id">
+        <input id="skan-stats-days" type="number" value="7" min="1" max="90">
+        <button class="btn" id="skan-stats-refresh">Refresh</button>
+      </div>
+    </div>
+    <div id="cv-bars" class="cv-bars"></div>
+  </section>
+
+  <!-- ─── CAPI configs ─────────────────────────────────────────────────── -->
+  <section id="section-capi-configs" class="section">
+    <div class="section-header">
+      <h1>CAPI · Configs</h1>
+      <button class="btn btn-primary" data-modal="modal-capi-config">+ Add config</button>
+    </div>
+    <table class="data-table" id="capi-configs-table">
+      <thead><tr>
+        <th>ID</th><th>App</th><th>Platform</th><th>Pixel</th>
+        <th>API ver</th><th>Test code</th><th>Enabled</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── CAPI delivery log ────────────────────────────────────────────── -->
+  <section id="section-capi-log" class="section">
+    <div class="section-header">
+      <h1>CAPI · Delivery log</h1>
+      <div class="filter-bar">
+        <input id="capi-log-app" placeholder="app_id">
+        <select id="capi-log-source">
+          <option value="">All sources</option>
+          <option value="skan">skan</option>
+          <option value="sdk">sdk</option>
+          <option value="manual">manual</option>
+        </select>
+        <select id="capi-log-status">
+          <option value="">All statuses</option>
+          <option value="true">Succeeded</option>
+          <option value="false">Failed</option>
+        </select>
+        <button class="btn" id="capi-log-refresh">Refresh</button>
+        <button class="btn" id="capi-log-retry">Retry pending</button>
+      </div>
+    </div>
+    <table class="data-table" id="capi-log-table">
+      <thead><tr>
+        <th>Time</th><th>App</th><th>Event</th><th>Source</th>
+        <th>Pixel</th><th>HTTP</th><th>Attempts</th><th>Status</th><th>Last error</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ─── CAPI test event ──────────────────────────────────────────────── -->
+  <section id="section-capi-test" class="section">
+    <h1>CAPI · Test event</h1>
+    <p class="hint">Send a one-off event to Facebook CAPI to verify your config end-to-end.</p>
+    <form id="capi-test-form" class="form-card">
+      <label>App ID<input name="app_id" required></label>
+      <label>Event name<input name="event_name" value="Purchase" required></label>
+      <label>Event ID (dedup key)<input name="event_id" placeholder="auto" required></label>
+      <label>Value<input name="value" type="number" step="0.01" placeholder="9.99"></label>
+      <label>Currency<input name="currency" value="USD"></label>
+      <label>External ID<input name="external_id" placeholder="optional user id"></label>
+      <button class="btn btn-primary" type="submit">Send</button>
+    </form>
+    <div id="capi-test-result" class="result-card" hidden></div>
+  </section>
+
+</main>
+
+<!-- ─── Modals ──────────────────────────────────────────────────────────── -->
+
+<div class="modal" id="modal-ip-rule">
+  <div class="modal-card">
+    <div class="modal-header"><h2>Add IP rule</h2><button class="modal-close" data-close>×</button></div>
+    <form id="form-ip-rule">
+      <div class="radio-row">
+        <label><input type="radio" name="match_type" value="cidr" checked> CIDR</label>
+        <label><input type="radio" name="match_type" value="ip_exact"> Exact IP</label>
+        <label><input type="radio" name="match_type" value="asn"> ASN</label>
+      </div>
+      <label>Match value<input name="match_value" required placeholder="192.168.1.0/24"></label>
+      <label>Visitor type<select name="visitor_type" required>
+        <option value="bot">bot</option>
+        <option value="ad_review">ad_review</option>
+        <option value="suspicious">suspicious</option>
+        <option value="real_user">real_user</option>
+      </select></label>
+      <label>Confidence<input name="confidence" type="number" step="0.01" min="0" max="1" value="0.95"></label>
+      <label>Description<input name="description"></label>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="modal-ua-rule">
+  <div class="modal-card">
+    <div class="modal-header"><h2>Add UA rule</h2><button class="modal-close" data-close>×</button></div>
+    <form id="form-ua-rule">
+      <label>Pattern (regex, case-insensitive)<input name="pattern" required placeholder="\\bmybot\\b"></label>
+      <label>Visitor type<select name="visitor_type" required>
+        <option value="bot">bot</option>
+        <option value="ad_review">ad_review</option>
+        <option value="suspicious">suspicious</option>
+      </select></label>
+      <label>Confidence<input name="confidence" type="number" step="0.01" min="0" max="1" value="0.95"></label>
+      <label>Description<input name="description"></label>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="modal-decoder">
+  <div class="modal-card modal-card-wide">
+    <div class="modal-header">
+      <h2 id="modal-decoder-title">New decoder</h2>
+      <button class="modal-close" data-close>×</button>
+    </div>
+    <form id="form-decoder">
+      <input type="hidden" name="id">
+      <div class="form-grid">
+        <label>App ID<input name="app_id" required></label>
+        <label>Source ID (SKAN 4)<input name="source_identifier" placeholder="1234"></label>
+        <label>Campaign ID (legacy)<input name="campaign_id" type="number" min="0" max="99"></label>
+      </div>
+      <label>Description<input name="description"></label>
+      <label class="checkbox-row"><input type="checkbox" name="enabled" checked> Enabled</label>
+
+      <div class="form-section-title">Rules (first match wins)</div>
+      <table class="rules-table">
+        <thead><tr>
+          <th>CV min</th><th>CV max</th><th>CAPI event</th>
+          <th>Forward</th><th>Static value</th><th>×Multiplier</th><th>Currency</th><th></th>
+        </tr></thead>
+        <tbody id="decoder-rules-body"></tbody>
+      </table>
+      <button type="button" class="btn" id="decoder-add-rule">+ Rule</button>
+
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="modal-capi-config">
+  <div class="modal-card">
+    <div class="modal-header"><h2>Add CAPI config</h2><button class="modal-close" data-close>×</button></div>
+    <form id="form-capi-config">
+      <label>App ID<input name="app_id" required></label>
+      <label>Platform<select name="platform">
+        <option value="facebook">facebook</option>
+        <option value="tiktok" disabled>tiktok (coming)</option>
+        <option value="google" disabled>google (coming)</option>
+      </select></label>
+      <label>Pixel ID / Dataset ID<input name="pixel_id" required></label>
+      <label>Access token<input name="access_token" required></label>
+      <label>Test event code<input name="test_event_code" placeholder="TEST12345"></label>
+      <label>API version<input name="api_version" value="v21.0"></label>
+      <label>Description<input name="description"></label>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- toasts -->
+<div id="toast-container" class="toast-container"></div>
+
+<script src="static/app.js" type="module"></script>
+</body>
+</html>
