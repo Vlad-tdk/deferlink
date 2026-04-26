@@ -113,8 +113,9 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 message="Сессия успешно разрешена"
             )
         else:
+            # Запрос обработан — просто нет атрибуции. Не ошибка.
             return ResolveResponse(
-                success=False,
+                success=True,
                 promo_id=None,
                 domain=None,
                 session_id=None,

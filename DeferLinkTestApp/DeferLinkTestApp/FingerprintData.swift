@@ -126,26 +126,54 @@ struct TestResult {
     let response: ResolveResponse?
     let error: String?
     let duration: TimeInterval
-    
-    var isSuccess: Bool {
-        return response?.success == true
+    /// Что мы ожидали увидеть. true — должен быть match, false — match не должен найтись.
+    /// По умолчанию true: подавляющее большинство тестов сидят сессию заранее.
+    let expectMatch: Bool
+
+    init(
+        timestamp: Date,
+        fingerprint: FingerprintData,
+        response: ResolveResponse?,
+        error: String?,
+        duration: TimeInterval,
+        expectMatch: Bool = true
+    ) {
+        self.timestamp   = timestamp
+        self.fingerprint = fingerprint
+        self.response    = response
+        self.error       = error
+        self.duration    = duration
+        self.expectMatch = expectMatch
     }
-    
+
+    /// «Тест прошёл», то есть результат соответствует ожиданию.
+    /// Сетевая ошибка — всегда провал.
+    var isSuccess: Bool {
+        if error != nil { return false }
+        guard let response = response, response.success else { return false }
+        return response.matched == expectMatch
+    }
+
     var statusDescription: String {
         if let error = error {
             return "❌ Ошибка: \(error)"
         }
-        
-        if let response = response {
-            if response.success && response.matched {
-                return "✅ Совпадение найдено"
-            } else if response.success && !response.matched {
-                return "⚠️ Нет совпадений"
-            } else {
-                return "❌ Ошибка: \(response.message ?? "Неизвестная ошибка")"
-            }
+
+        guard let response = response else {
+            return "❓ Неизвестный статус"
         }
-        
-        return "❓ Неизвестный статус"
+
+        // Сервер вернул не-OK (например, валидация падает).
+        if !response.success {
+            return "❌ Ошибка сервера: \(response.message ?? "—")"
+        }
+
+        // Запрос обработан штатно — сравниваем match с ожиданием.
+        switch (expectMatch, response.matched) {
+        case (true, true):   return "✅ Совпадение найдено"
+        case (true, false):  return "❌ Нет совпадения (ожидался match)"
+        case (false, false): return "✅ Match не найден (как и ожидалось)"
+        case (false, true):  return "⚠️ Неожиданный match"
+        }
     }
 }

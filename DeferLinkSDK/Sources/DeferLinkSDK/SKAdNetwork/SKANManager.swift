@@ -82,9 +82,9 @@ public final class SKANManager {
         do {
             let fetched = try await client.fetchSKANConfig(appId: appId)
             self.config = fetched
-            DeferLinkLogger.log("SKANManager: config refreshed (schema=\(fetched.schemaName))")
+            DeferLinkLogger.debug("SKANManager: config refreshed (schema=\(fetched.schemaName))")
         } catch {
-            DeferLinkLogger.log("SKANManager: config fetch failed (\(error)); using defaults")
+            DeferLinkLogger.debug("SKANManager: config fetch failed (\(error)); using defaults")
         }
     }
 
@@ -165,18 +165,18 @@ public final class SKANManager {
         // Apple's rule: CV must be monotonically non-decreasing within
         // the conversion window for the postback to fire.
         guard cv >= state.lastCV else {
-            DeferLinkLogger.log("SKANManager: skip CV=\(cv) (not greater than last=\(state.lastCV))")
+            DeferLinkLogger.debug("SKANManager: skip CV=\(cv) (not greater than last=\(state.lastCV))")
             return
         }
 
         let submitted = await submit(cv: cv)
         guard submitted else {
-            DeferLinkLogger.log("SKANManager: CV=\(cv) not persisted because StoreKit update failed")
+            DeferLinkLogger.debug("SKANManager: CV=\(cv) not persisted because StoreKit update failed")
             return
         }
 
         _ = stateStore.update { $0.lastCV = cv }
-        DeferLinkLogger.log("SKANManager: submitted CV=\(cv)")
+        DeferLinkLogger.debug("SKANManager: submitted CV=\(cv)")
     }
 
     private func submit(cv: Int) async -> Bool {
@@ -196,7 +196,7 @@ public final class SKANManager {
                 )
                 return true
             } catch {
-                DeferLinkLogger.log("SKANManager: SKAN v4 update failed (\(error)); falling back")
+                DeferLinkLogger.debug("SKANManager: SKAN v4 update failed (\(error)); falling back")
             }
         }
 
@@ -204,7 +204,7 @@ public final class SKANManager {
             return await withCheckedContinuation { continuation in
                 SKAdNetwork.updatePostbackConversionValue(cv) { error in
                     if let error = error {
-                        DeferLinkLogger.log("SKANManager: SKAN v3 update error: \(error)")
+                        DeferLinkLogger.debug("SKANManager: SKAN v3 update error: \(error)")
                         continuation.resume(returning: false)
                     } else {
                         continuation.resume(returning: true)

@@ -6,7 +6,7 @@ Enhanced deep link handling logic with intelligent matching
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone as _tz
 from typing import Dict, List, Optional, Any
 
 from fastapi import HTTPException, status
@@ -59,7 +59,7 @@ class DeepLinkHandler:
             ttl_hours = ttl_hours or self.config.DEFAULT_TTL_HOURS
 
             expires_at = (
-                datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+                datetime.now(_tz.utc) + timedelta(hours=ttl_hours)
             ).strftime("%Y-%m-%d %H:%M:%S")
 
             query = """
@@ -440,7 +440,7 @@ class DeepLinkHandler:
                 'sessions_last_hour': sessions_last_hour,
                 'average_confidence': float(avg_confidence or 0.0),
                 'matcher_stats': self.stats,
-                'timestamp': datetime.now(timezone.utc).isoformat()
+                'timestamp': datetime.now(_tz.utc).isoformat()
             }
 
         except Exception as e:
@@ -448,7 +448,7 @@ class DeepLinkHandler:
             return {
                 'error': 'Не удалось получить статистику',
                 'matcher_stats': self.stats,
-                'timestamp': datetime.now(timezone.utc).isoformat()
+                'timestamp': datetime.now(_tz.utc).isoformat()
             }
 
     def optimize_algorithm_weights(self) -> Dict[str, float]:

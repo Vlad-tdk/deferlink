@@ -585,8 +585,10 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
             )
         else:
             logger.info("Совпадение не найдено или сессия истекла")
+            # Запрос обработан штатно — просто нет атрибуции.
+            # success=True означает "сервер отработал", matched=False означает "match не найден".
             return ResolveResponse(
-                success=False,
+                success=True,
                 promo_id=None,
                 domain=None,
                 session_id=None,

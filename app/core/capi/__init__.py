@@ -13,6 +13,7 @@ from .models import (
 )
 from .facebook import FacebookCAPIClient
 from .service import CAPIService, capi_service
+from .retry_worker import CAPIRetryWorker, start_capi_retry_worker
 
 __all__ = [
     "CAPIConfig",
@@ -21,6 +22,8 @@ __all__ = [
     "CAPIPlatform",
     "CAPIService",
     "CAPIUserData",
+    "CAPIRetryWorker",
     "FacebookCAPIClient",
     "capi_service",
+    "start_capi_retry_worker",
 ]

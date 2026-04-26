@@ -171,118 +171,179 @@ class DeferLinkService: ObservableObject {
     }
 
     // MARK: - Test Methods
+    //
+    // Чтобы тест имел смысл для системы атрибуции, нужно каждый раз
+    // сначала «кликнуть» (POST /dl создаёт сессию с fingerprint'ом),
+    // потом запустить /resolve. Голый /resolve без предварительного /dl
+    // в проде — это тест на «нет атрибуции» (см. runNoMatchTest).
+
+    /// End-to-end: создать сессию через /dl, подождать, запросить /resolve.
+    /// Ожидание: matched=true.
     func runSingleTest(promoId: String = "test2024", domain: String = "test.com") {
         isLoading = true
-        
-        let startTime = Date()
-        let fingerprint = FingerprintCollector.collectFingerprint()
-        
+        runSeededResolve(
+            fingerprint: FingerprintCollector.collectFingerprint(),
+            promoId:     promoId,
+            domain:      domain,
+            seedDelay:   1.0,
+            expectMatch: true
+        ) { [weak self] in
+            DispatchQueue.main.async { self?.isLoading = false }
+        }
+    }
+
+    /// Алиас для UI — раньше был отдельный «Full Test», теперь это то же самое,
+    /// что и `runSingleTest`. Оставлен для совместимости со SwiftUI вьюхами.
+    func runFullTest(promoId: String = "test2024", domain: String = "test.com") {
+        runSingleTest(promoId: promoId, domain: domain)
+    }
+
+    /// Стресс-тест: для каждой fingerprint-вариации сидим отдельную сессию,
+    /// затем резолвим её. Каждое устройство должно матчиться независимо.
+    func runStressTest(count: Int = 10, promoId: String = "test2024", domain: String = "test.com") {
+        isLoading = true
+
+        let variations = FingerprintCollector.createTestVariations()
+        let total      = max(1, count)
+        var completed  = 0
+        let lock       = NSLock()
+
+        for i in 0..<total {
+            let fingerprint = variations[i % variations.count]
+            // Уникальный promo_id на тест: независимые сессии не сталкиваются между собой
+            // и `same_campaign` логика на сервере не путает их.
+            let perTestPromoId = "\(promoId)_\(i)"
+
+            // Разносим запросы по времени, чтобы не упереться в anti-fraud rate-limit.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) {
+                self.runSeededResolve(
+                    fingerprint: fingerprint,
+                    promoId:     perTestPromoId,
+                    domain:      domain,
+                    seedDelay:   0.5,
+                    expectMatch: true
+                ) {
+                    lock.lock(); completed += 1; let done = completed >= total; lock.unlock()
+                    if done {
+                        DispatchQueue.main.async { self.isLoading = false }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Сценарий «нет атрибуции»: НЕ создаём сессию, сразу резолвим.
+    /// Ожидание: matched=false. Это успешный тест.
+    func runNoMatchTest(promoId: String = "nomatch", domain: String = "test.com") {
+        isLoading = true
+
+        let startTime   = Date()
+        // Используем синтетический fingerprint, заведомо не совпадающий с реальным устройством,
+        // чтобы случайно не подобрать чужую сессию.
+        let fingerprint = FingerprintData(
+            model:        "synthetic-no-match",
+            language:     "xx-XX",
+            timezone:     "Etc/UTC",
+            userAgent:    "DeferLinkTest-NoMatchProbe",
+            screenWidth:  1,
+            screenHeight: 1,
+            platform:     "iOS",
+            appVersion:   "0.0.0",
+            idfv:         UUID().uuidString
+        )
+
         networkManager.resolveDeepLink(fingerprint: fingerprint) { [weak self] result in
             DispatchQueue.main.async {
                 let duration = Date().timeIntervalSince(startTime)
-                
                 let testResult: TestResult
-                
                 switch result {
                 case .success(let response):
                     testResult = TestResult(
-                        timestamp: Date(),
+                        timestamp:   Date(),
                         fingerprint: fingerprint,
-                        response: response,
-                        error: nil,
-                        duration: duration
+                        response:    response,
+                        error:       nil,
+                        duration:    duration,
+                        expectMatch: false
                     )
-                    
                 case .failure(let error):
                     testResult = TestResult(
-                        timestamp: Date(),
+                        timestamp:   Date(),
                         fingerprint: fingerprint,
-                        response: nil,
-                        error: error.localizedDescription,
-                        duration: duration
+                        response:    nil,
+                        error:       error.localizedDescription,
+                        duration:    duration,
+                        expectMatch: false
                     )
                 }
-                
                 self?.testResults.insert(testResult, at: 0)
                 self?.isLoading = false
             }
         }
     }
-    
-    func runFullTest(promoId: String = "test2024", domain: String = "test.com") {
-        isLoading = true
-        
-        // Шаг 1: Симулируем визит браузера
-        networkManager.simulateBrowserVisit(promoId: promoId, domain: domain) { [weak self] result in
-            switch result {
-            case .success(_):
-                print("✅ Браузерная сессия создана")
-                
-                // Шаг 2: Ждем немного и тестируем resolve
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    self?.runSingleTest(promoId: promoId, domain: domain)
-                }
-                
+
+    // MARK: - Internal: seed-then-resolve helper
+
+    /// Базовый блок: /dl с заданным fingerprint'ом → задержка → /resolve тем же fingerprint'ом.
+    /// Записывает в `testResults` единственный итоговый результат.
+    private func runSeededResolve(
+        fingerprint: FingerprintData,
+        promoId:     String,
+        domain:      String,
+        seedDelay:   TimeInterval,
+        expectMatch: Bool,
+        finally:     @escaping () -> Void
+    ) {
+        let startTime = Date()
+
+        networkManager.simulateBrowserVisit(
+            fingerprint: fingerprint,
+            promoId:     promoId,
+            domain:      domain
+        ) { [weak self] seedResult in
+            switch seedResult {
             case .failure(let error):
                 DispatchQueue.main.async {
-                    let testResult = TestResult(
-                        timestamp: Date(),
-                        fingerprint: FingerprintCollector.collectFingerprint(),
-                        response: nil,
-                        error: "Ошибка создания браузерной сессии: \(error.localizedDescription)",
-                        duration: 0
+                    let result = TestResult(
+                        timestamp:   Date(),
+                        fingerprint: fingerprint,
+                        response:    nil,
+                        error:       "Не удалось создать сессию /dl: \(error.localizedDescription)",
+                        duration:    Date().timeIntervalSince(startTime),
+                        expectMatch: expectMatch
                     )
-                    
-                    self?.testResults.insert(testResult, at: 0)
-                    self?.isLoading = false
+                    self?.testResults.insert(result, at: 0)
+                    finally()
                 }
-            }
-        }
-    }
-    
-    func runStressTest(count: Int = 10, promoId: String = "test2024", domain: String = "test.com") {
-        isLoading = true
-        
-        let variations = FingerprintCollector.createTestVariations()
-        var completedTests = 0
-        
-        for i in 0..<count {
-            let fingerprint = variations[i % variations.count]
-            let startTime = Date()
-            
-            // Добавляем задержку между запросами
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) {
-                self.networkManager.resolveDeepLink(fingerprint: fingerprint) { [weak self] result in
-                    DispatchQueue.main.async {
-                        let duration = Date().timeIntervalSince(startTime)
-                        
-                        let testResult: TestResult
-                        
-                        switch result {
-                        case .success(let response):
-                            testResult = TestResult(
-                                timestamp: Date(),
-                                fingerprint: fingerprint,
-                                response: response,
-                                error: nil,
-                                duration: duration
-                            )
-                            
-                        case .failure(let error):
-                            testResult = TestResult(
-                                timestamp: Date(),
-                                fingerprint: fingerprint,
-                                response: nil,
-                                error: error.localizedDescription,
-                                duration: duration
-                            )
-                        }
-                        
-                        self?.testResults.insert(testResult, at: 0)
-                        
-                        completedTests += 1
-                        if completedTests >= count {
-                            self?.isLoading = false
+
+            case .success:
+                DispatchQueue.main.asyncAfter(deadline: .now() + seedDelay) {
+                    self?.networkManager.resolveDeepLink(fingerprint: fingerprint) { resolveResult in
+                        DispatchQueue.main.async {
+                            let duration = Date().timeIntervalSince(startTime)
+                            let result: TestResult
+                            switch resolveResult {
+                            case .success(let response):
+                                result = TestResult(
+                                    timestamp:   Date(),
+                                    fingerprint: fingerprint,
+                                    response:    response,
+                                    error:       nil,
+                                    duration:    duration,
+                                    expectMatch: expectMatch
+                                )
+                            case .failure(let error):
+                                result = TestResult(
+                                    timestamp:   Date(),
+                                    fingerprint: fingerprint,
+                                    response:    nil,
+                                    error:       error.localizedDescription,
+                                    duration:    duration,
+                                    expectMatch: expectMatch
+                                )
+                            }
+                            self?.testResults.insert(result, at: 0)
+                            finally()
                         }
                     }
                 }
@@ -322,31 +383,39 @@ class DeferLinkService: ObservableObject {
     
     // MARK: - Test Scenarios
     func runScenarioTest(scenario: TestScenario) {
-        isLoading = true
-        
         switch scenario {
         case .immediateResolve:
-            // Симулируем браузерную сессию и сразу resolve
-            networkManager.simulateBrowserVisit(promoId: "immediate", domain: "test.com") { [weak self] _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    self?.runSingleTest(promoId: "immediate", domain: "test.com")
-                }
+            // /dl, ~1с пауза, /resolve. Должен быть match.
+            isLoading = true
+            runSeededResolve(
+                fingerprint: FingerprintCollector.collectFingerprint(),
+                promoId:     "immediate",
+                domain:      "test.com",
+                seedDelay:   1.0,
+                expectMatch: true
+            ) { [weak self] in
+                DispatchQueue.main.async { self?.isLoading = false }
             }
-            
+
         case .delayedResolve:
-            // Симулируем браузерную сессию и resolve через 30 секунд
-            networkManager.simulateBrowserVisit(promoId: "delayed", domain: "test.com") { [weak self] _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) {
-                    self?.runSingleTest(promoId: "delayed", domain: "test.com")
-                }
+            // /dl, 30с пауза, /resolve. Должен быть match (TTL по умолчанию 24 часа).
+            isLoading = true
+            runSeededResolve(
+                fingerprint: FingerprintCollector.collectFingerprint(),
+                promoId:     "delayed",
+                domain:      "test.com",
+                seedDelay:   30.0,
+                expectMatch: true
+            ) { [weak self] in
+                DispatchQueue.main.async { self?.isLoading = false }
             }
-            
+
         case .noMatchTest:
-            // Тестируем resolve без предварительной браузерной сессии
-            runSingleTest(promoId: "nomatch", domain: "test.com")
-            
+            // Голый /resolve без сидинга. Должен быть matched=false → это успех.
+            runNoMatchTest()
+
         case .multipleDevices:
-            // Симулируем несколько разных устройств
+            // Каждое «устройство» (вариация fingerprint) сидится отдельно и резолвится.
             let variations = FingerprintCollector.createTestVariations()
             runStressTest(count: variations.count, promoId: "multi", domain: "test.com")
         }

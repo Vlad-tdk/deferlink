@@ -42,6 +42,21 @@ final class EventTracker {
     /// App-level user identifier (set via DeferLink.shared.setUserId).
     var appUserId:  String?
 
+    /// Optional revenue forwarder. When SKAdNetwork is enabled, DeferLink
+    /// installs a closure here that forwards revenue from purchase/subscribe
+    /// events into SKANManager.recordRevenue(...). Kept as a closure to
+    /// avoid a hard dependency on SKANManager from EventTracker.
+    var revenueForwarder: ((Double, String) -> Void)?
+
+    /// Event names that count as monetary conversions for SKAdNetwork
+    /// CV computation. Anything else with `revenue` set is ignored — we
+    /// don't want non-monetary events ("af_add_to_cart" etc.) inflating
+    /// the conversion bucket.
+    private let monetaryEventNames: Set<String> = [
+        DLEventName.purchase,
+        DLEventName.subscribe,
+    ]
+
     /// In-memory buffer — flushed on timer or when full.
     private var buffer: [DeferLinkEvent] = []
 
@@ -62,11 +77,27 @@ final class EventTracker {
     // MARK: - Public API
 
     /// Enqueue a single event.  Attribution context is stamped automatically.
+    ///
+    /// Side effect: if the event is a monetary conversion (purchase /
+    /// subscribe) with `revenue > 0`, we also forward the amount to
+    /// SKAdNetwork via the installed `revenueForwarder` (if any). This
+    /// keeps the SDK contract simple — apps call `logEvent(.purchase(9.99))`
+    /// once and both the analytics pipeline and the SKAN CV update happen.
     func track(_ event: DeferLinkEvent) {
         var ev = event
         if ev.sessionId  == nil { ev.sessionId  = sessionId  }
         if ev.promoId    == nil { ev.promoId    = promoId    }
         if ev.appUserId  == nil { ev.appUserId  = appUserId  }
+
+        if let revenue = ev.revenue,
+           revenue > 0,
+           monetaryEventNames.contains(ev.eventName),
+           let forwarder = revenueForwarder {
+            DeferLinkLogger.debug(
+                "EventTracker: forwarding revenue \(revenue) \(ev.currency) to SKAdNetwork"
+            )
+            forwarder(revenue, ev.currency)
+        }
 
         buffer.append(ev)
         DeferLinkLogger.debug("EventTracker: buffered '\(ev.eventName)' (buffer=\(buffer.count))")

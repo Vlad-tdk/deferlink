@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		F5BE59DD2F9EAFFD002EE9B6 /* DeferLinkSDK in Frameworks */ = {isa = PBXBuildFile; productRef = F5BE59DC2F9EAFFD002EE9B6 /* DeferLinkSDK */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		F5E1693F2DEF65C100840327 /* DeferLinkTestApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DeferLinkTestApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -36,6 +40,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F5BE59DD2F9EAFFD002EE9B6 /* DeferLinkSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +83,7 @@
 			);
 			name = DeferLinkTestApp;
 			packageProductDependencies = (
+				F5BE59DC2F9EAFFD002EE9B6 /* DeferLinkSDK */,
 			);
 			productName = DeferLinkTestApp;
 			productReference = F5E1693F2DEF65C100840327 /* DeferLinkTestApp.app */;
@@ -107,6 +113,9 @@
 			);
 			mainGroup = F5E169362DEF65C100840327;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F5BE59DB2F9EAFFD002EE9B6 /* XCLocalSwiftPackageReference "../DeferLinkSDK" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F5E169402DEF65C100840327 /* Products */;
 			projectDirPath = "";
@@ -335,6 +344,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		F5BE59DB2F9EAFFD002EE9B6 /* XCLocalSwiftPackageReference "../DeferLinkSDK" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../DeferLinkSDK;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F5BE59DC2F9EAFFD002EE9B6 /* DeferLinkSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DeferLinkSDK;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = F5E169372DEF65C100840327 /* Project object */;
 }

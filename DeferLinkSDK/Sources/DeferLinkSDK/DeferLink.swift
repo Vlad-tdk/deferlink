@@ -287,7 +287,19 @@ public final class DeferLink: NSObject {
     public func enableSKAdNetwork(appId: String) {
         guard ensureConfigured(), let client = client else { return }
         guard skanManager == nil else { return }
-        skanManager = SKANManager(appId: appId, client: client)
+        let manager = SKANManager(appId: appId, client: client)
+        skanManager = manager
+
+        // Auto-forward purchase/subscribe revenue from EventTracker into
+        // the SKAN conversion-value computation. The closure captures
+        // SKANManager weakly so EventTracker doesn't keep it alive past
+        // SDK teardown.
+        eventTracker?.revenueForwarder = { [weak manager] usd, currency in
+            Task { @MainActor in
+                manager?.recordRevenue(usd, currency: currency)
+            }
+        }
+
         DeferLinkLogger.debug("SKAdNetwork enabled for appId=\(appId)")
     }
 

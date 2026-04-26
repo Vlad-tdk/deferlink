@@ -143,10 +143,22 @@ class NetworkManager: ObservableObject {
     }
     
     // MARK: - Test Methods
+
+    /// Симулирует визит в браузере с fingerprint'ом текущего устройства.
     func simulateBrowserVisit(promoId: String, domain: String, completion: @escaping (Result<String, Error>) -> Void) {
-        // Симулируем визит браузера с текущим устройством
         let fingerprint = FingerprintCollector.collectFingerprint()
-        
+        simulateBrowserVisit(fingerprint: fingerprint, promoId: promoId, domain: domain, completion: completion)
+    }
+
+    /// Симулирует визит в браузере с произвольным fingerprint'ом.
+    /// Нужен для stress-теста: бэкенд должен запомнить именно эти параметры,
+    /// чтобы потом /resolve с тем же fingerprint их и нашёл.
+    func simulateBrowserVisit(
+        fingerprint: FingerprintData,
+        promoId: String,
+        domain: String,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
         var urlComponents = URLComponents(string: "\(baseURL)/dl")!
         urlComponents.queryItems = [
             URLQueryItem(name: "promo_id", value: promoId),
@@ -156,29 +168,31 @@ class NetworkManager: ObservableObject {
             URLQueryItem(name: "screen_size", value: "\(fingerprint.screenWidth ?? 0)x\(fingerprint.screenHeight ?? 0)"),
             URLQueryItem(name: "model", value: fingerprint.model)
         ]
-        
+
         guard let url = urlComponents.url else {
             completion(.failure(NetworkError.invalidURL))
             return
         }
-        
+
         var request = URLRequest(url: url)
+        // Запрещаем URLSession следовать редиректу: /dl при iOS UA вернёт 302 на App Store,
+        // а нам важен только сам факт «сессия создана» и установленный cookie.
         request.setValue(fingerprint.userAgent, forHTTPHeaderField: "User-Agent")
-        
+
         let task = session.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
             }
-            
+            // 200 (HTML), 302 (redirect to AppStore) — оба считаем успехом: сессия создана.
             if let httpResponse = response as? HTTPURLResponse,
-               httpResponse.statusCode == 200 {
-                completion(.success("Browser visit simulated successfully"))
+               (200..<400).contains(httpResponse.statusCode) {
+                completion(.success("Browser visit simulated (HTTP \(httpResponse.statusCode))"))
             } else {
                 completion(.failure(NetworkError.serverError))
             }
         }
-        
+
         task.resume()
     }
 }
