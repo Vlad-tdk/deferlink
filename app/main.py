@@ -4,9 +4,10 @@ DeferLink FastAPI Application
 """
 
 import asyncio
+import html
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Literal, Union
 import uvicorn
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response, status
@@ -19,7 +20,13 @@ from .config import Config
 from .database import init_database, db_manager
 from .deeplink_handler import DeepLinkHandler
 from .models import ResolveRequest, ResolveResponse
-from .utils import detect_ios_device, generate_instruction_page, get_client_ip
+from .utils import (
+    detect_ios_device,
+    generate_instruction_page,
+    get_client_ip,
+    validate_domain,
+    validate_promo_id,
+)
 from .api import deeplinks, health, stats, events as events_api
 from .api import cloaking_admin
 from .api import skadnetwork as skadnetwork_api
@@ -49,6 +56,7 @@ stats.set_deeplink_handler(deeplink_handler)
 # Глобальные переменные для задач
 _cleanup_task: Optional[asyncio.Task[None]] = None
 _optimization_task: Optional[asyncio.Task[None]] = None
+_capi_retry_task: Optional[asyncio.Task[None]] = None
 
 
 async def cleanup_task() -> None:
@@ -85,9 +93,49 @@ async def optimization_task() -> None:
         await asyncio.sleep(3600)
 
 
+async def capi_retry_task() -> None:
+    """Периодический retry worker для CAPI delivery log."""
+    while True:
+        try:
+            with db_manager.get_connection() as conn:
+                processed = await capi_service.retry_pending(conn)
+            if processed > 0:
+                logger.info("CAPI retry worker processed %d rows", processed)
+        except Exception as e:
+            logger.error("Ошибка CAPI retry worker: %s", e)
+
+        await asyncio.sleep(Config.CAPI_RETRY_INTERVAL_SECONDS)
+
+
+def _copy_fingerprint_without_devicecheck(resolve_request: ResolveRequest) -> ResolveRequest:
+    try:
+        fingerprint = resolve_request.fingerprint.model_copy(update={"device_check_token": None})
+        return resolve_request.model_copy(update={"fingerprint": fingerprint})
+    except AttributeError:
+        fingerprint = resolve_request.fingerprint.copy(update={"device_check_token": None})
+        return resolve_request.copy(update={"fingerprint": fingerprint})
+
+
+async def _prepare_resolve_request(resolve_request: ResolveRequest) -> tuple[ResolveRequest, Optional[str]]:
+    token = resolve_request.fingerprint.device_check_token
+    if not token or not Config.DEVICECHECK_ENABLED:
+        return resolve_request, None
+
+    verification = await dc_module.get_verifier().verify(token)
+    if verification.status == "valid":
+        return resolve_request, token
+
+    logger.info(
+        "DeviceCheck token not trusted for Tier-3 matching: status=%s reason=%s",
+        verification.status,
+        verification.reason,
+    )
+    return _copy_fingerprint_without_devicecheck(resolve_request), None
+
+
 async def startup_tasks():
     """Запуск фоновых задач"""
-    global _cleanup_task, _optimization_task
+    global _cleanup_task, _optimization_task, _capi_retry_task
 
     logger.info("Запуск приложения DeferLink...")
 
@@ -150,12 +198,13 @@ async def startup_tasks():
     # Запуск фоновых задач
     _cleanup_task = asyncio.create_task(cleanup_task())
     _optimization_task = asyncio.create_task(optimization_task())
+    _capi_retry_task = asyncio.create_task(capi_retry_task())
     logger.info("Фоновые задачи запущены")
 
 
 async def shutdown_tasks():
     """Остановка фоновых задач"""
-    global _cleanup_task, _optimization_task
+    global _cleanup_task, _optimization_task, _capi_retry_task
 
     logger.info("Завершение работы приложения...")
 
@@ -174,11 +223,19 @@ async def shutdown_tasks():
         except asyncio.CancelledError:
             pass
 
+    if _capi_retry_task is not None:
+        _capi_retry_task.cancel()
+        try:
+            await _capi_retry_task
+        except asyncio.CancelledError:
+            pass
+
     logger.info("Фоновые задачи остановлены")
 
     # Очистка ресурсов
     try:
         deeplink_handler.intelligent_matcher.clear_cache()
+        await capi_service.close()
         logger.info("Ресурсы очищены")
     except Exception as e:
         logger.warning(f"Ошибка при очистке ресурсов: {e}")
@@ -283,6 +340,13 @@ async def create_deeplink(
     Returns:
         HTML страница или редирект в App Store
     """
+    if not validate_promo_id(promo_id):
+        raise HTTPException(status_code=422, detail="Invalid promo_id")
+    if not validate_domain(domain):
+        raise HTTPException(status_code=422, detail="Invalid domain")
+    if ttl <= 0 or ttl > 168:
+        raise HTTPException(status_code=422, detail="TTL must be between 1 and 168 hours")
+
     user_agent = request.headers.get('user-agent', '')
     client_ip = get_client_ip(request)
 
@@ -363,16 +427,30 @@ async def create_deeplink(
     if session_id:
         existing_session = deeplink_handler.get_session(session_id)
         if existing_session:
-            logger.info(f"Используется существующая сессия: {session_id}")
-
-            # Определение нужного действия
-            if detect_ios_device(user_agent):
-                # Редирект в App Store для iOS
-                app_store_url = f"https://apps.apple.com/app/id{promo_id}" if promo_id.isdigit() else "https://apps.apple.com"
-                return RedirectResponse(url=app_store_url)
+            same_campaign = (
+                existing_session.get("promo_id") == promo_id
+                and existing_session.get("domain") == domain
+            )
+            if not same_campaign:
+                logger.info(
+                    "Игнорируем stale session cookie %s: existing=%s/%s request=%s/%s",
+                    session_id,
+                    existing_session.get("promo_id"),
+                    existing_session.get("domain"),
+                    promo_id,
+                    domain,
+                )
             else:
-                # Возврат HTML страницы с инструкциями
-                return HTMLResponse(content=generate_instruction_page(domain, promo_id))
+                logger.info(f"Используется существующая сессия: {session_id}")
+
+                # Определение нужного действия
+                if detect_ios_device(user_agent):
+                    # Редирект в App Store для iOS
+                    app_store_url = f"https://apps.apple.com/app/id{promo_id}" if promo_id.isdigit() else "https://apps.apple.com"
+                    return RedirectResponse(url=app_store_url)
+                else:
+                    # Возврат HTML страницы с инструкциями
+                    return HTMLResponse(content=generate_instruction_page(domain, promo_id))
 
     # ── Определяем контекст браузера ──────────────────────────────────────────
     browser_info = detect_browser(user_agent)
@@ -500,20 +578,16 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
         Информация о найденном диплинке или null
     """
     try:
-        # Поиск подходящей сессии с новым алгоритмом
-        matching_session = deeplink_handler.find_matching_session(request.fingerprint)
+        prepared_request, verified_devicecheck_token = await _prepare_resolve_request(request)
+        matching_session = deeplink_handler.resolve_matching_session(
+            prepared_request.fingerprint,
+            device_check_token_b64=verified_devicecheck_token,
+        )
 
         if matching_session:
             confidence_score = matching_session.get('match_confidence', 0.0)
             match_details    = matching_session.get('match_details', {})
             match_method     = matching_session.get('match_method') or (match_details or {}).get('method')
-
-            deeplink_handler.mark_session_resolved(
-                session_id=matching_session['session_id'],
-                confidence_score=confidence_score,
-                match_details=match_details,
-                device_check_token_b64=request.fingerprint.device_check_token,
-            )
 
             logger.info(
                 "Resolved: session=%s method=%s confidence=%.3f",
@@ -525,8 +599,8 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 promo_id=matching_session.get('promo_id'),
                 domain=matching_session.get('domain'),
                 session_id=matching_session.get('session_id'),
-                redirect_url=request.fallback_url,
-                app_url=request.app_scheme,
+                redirect_url=prepared_request.fallback_url,
+                app_url=prepared_request.app_scheme,
                 matched=True,
                 match_method=match_method,
                 message="Сессия успешно разрешена"
@@ -538,8 +612,8 @@ async def resolve_deeplink(request: ResolveRequest) -> ResolveResponse:
                 promo_id=None,
                 domain=None,
                 session_id=None,
-                redirect_url=request.fallback_url,
-                app_url=request.app_scheme,
+                redirect_url=prepared_request.fallback_url,
+                app_url=prepared_request.app_scheme,
                 matched=False,
                 match_method=None,
                 message="Совпадение не найдено или сессия истекла"
@@ -585,7 +659,9 @@ async def log_requests(request: Request, call_next):
 
 def _build_seo_page(promo_id: str, domain: str) -> str:
     """OG/meta-tags landing page for search engine crawlers."""
-    app_name  = Config.APP_NAME or domain
+    app_name  = html.escape(Config.APP_NAME or domain, quote=True)
+    safe_domain = html.escape(domain, quote=True)
+    safe_promo_id = html.escape(promo_id, quote=True)
     store_id  = Config.APP_STORE_ID or ""
     store_url = f"https://apps.apple.com/app/id{store_id}" if store_id else "https://apps.apple.com"
     return f"""<!DOCTYPE html>
@@ -594,14 +670,14 @@ def _build_seo_page(promo_id: str, domain: str) -> str:
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{app_name} — Download</title>
-  <meta name="description" content="Download {app_name} and get exclusive access with promo {promo_id}.">
+  <meta name="description" content="Download {app_name} and get exclusive access with promo {safe_promo_id}.">
   <meta property="og:title"       content="{app_name}">
-  <meta property="og:description" content="Download {app_name} — exclusive promo {promo_id}">
+  <meta property="og:description" content="Download {app_name} — exclusive promo {safe_promo_id}">
   <meta property="og:type"        content="website">
-  <meta property="og:url"         content="https://{domain}">
+  <meta property="og:url"         content="https://{safe_domain}">
   <meta name="twitter:card"       content="summary">
   <meta name="twitter:title"      content="{app_name}">
-  <link rel="canonical" href="https://{domain}">
+  <link rel="canonical" href="https://{safe_domain}">
 </head>
 <body>
   <h1>{app_name}</h1>
@@ -613,7 +689,7 @@ def _build_seo_page(promo_id: str, domain: str) -> str:
 
 def _build_compliant_page(promo_id: str, domain: str) -> str:
     """Clean, policy-compliant landing for ad network reviewers."""
-    app_name = Config.APP_NAME or domain
+    app_name = html.escape(Config.APP_NAME or domain, quote=True)
     store_id  = Config.APP_STORE_ID or ""
     store_url = f"https://apps.apple.com/app/id{store_id}" if store_id else "https://apps.apple.com"
     return f"""<!DOCTYPE html>

@@ -169,3 +169,15 @@ def test_signature_verified_zero_when_disabled(parser):
     })
     # Verification disabled → flag stays at default 0 (not checked)
     assert pb.signature_verified == 0
+
+
+def test_v4_signed_fields_keep_missing_did_win_empty(parser):
+    pb = parser.parse({
+        "version": "4.0",
+        "ad-network-id": "x",
+        "transaction-id": "tx-didwin",
+        "source-identifier": "1234",
+        "postback-sequence-index": 0,
+    })
+    fields = parser._build_signed_fields(pb)
+    assert fields[-2] == ""

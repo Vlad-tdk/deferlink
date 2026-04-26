@@ -203,7 +203,11 @@ class PostbackParser:
                 "true" if pb.redownload else "false",
                 pb.source_app_id or pb.source_domain or "",
                 str(int(pb.fidelity_type)) if pb.fidelity_type is not None else "",
-                "true" if pb.did_win else "false",
+                (
+                    ""
+                    if pb.did_win is None
+                    else ("true" if pb.did_win else "false")
+                ),
                 str(int(pb.postback_sequence_index)),
             ]
         else:

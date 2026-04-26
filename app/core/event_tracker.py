@@ -52,14 +52,19 @@ def insert_event(
     app_version: Optional[str] = None,
     sdk_version: Optional[str] = None,
     ip_address: Optional[str] = None,
-) -> bool:
+) -> str:
     """
-    Insert a single event.  Returns True on success, False if event_id duplicate.
+    Insert a single event.
+
+    Returns:
+        "inserted" | "duplicate" | "failed"
     """
     props_json = json.dumps(properties, ensure_ascii=False) if properties else None
 
     try:
-        db_manager.execute_insert(
+        with db_manager.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
             """
             INSERT OR IGNORE INTO user_events
                 (event_id, session_id, app_user_id, promo_id, event_name,
@@ -67,17 +72,23 @@ def insert_event(
                  timestamp, ip_address)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                event_id, session_id, app_user_id, promo_id, event_name,
-                revenue, currency, props_json, platform, app_version, sdk_version,
-                timestamp, ip_address,
-            ),
-        )
+                (
+                    event_id, session_id, app_user_id, promo_id, event_name,
+                    revenue, currency, props_json, platform, app_version, sdk_version,
+                    timestamp, ip_address,
+                ),
+            )
+            conn.commit()
+
+        if cur.rowcount == 0:
+            logger.debug("Duplicate event ignored: %s", event_id[:8])
+            return "duplicate"
+
         logger.debug("Event inserted: %s / %s", event_name, event_id[:8])
-        return True
+        return "inserted"
     except Exception as exc:
         logger.error("Failed to insert event %s: %s", event_id, exc)
-        return False
+        return "failed"
 
 
 def insert_events_batch(events: List[Dict[str, Any]], ip_address: Optional[str] = None) -> Dict[str, int]:
@@ -99,7 +110,7 @@ def insert_events_batch(events: List[Dict[str, Any]], ip_address: Optional[str] 
             duplicate += 1
             continue
 
-        ok = insert_event(
+        status = insert_event(
             event_id=event_id,
             event_name=event_name,
             timestamp=ev.get("timestamp", datetime.now(timezone.utc).isoformat()),
@@ -114,8 +125,10 @@ def insert_events_batch(events: List[Dict[str, Any]], ip_address: Optional[str] 
             sdk_version=ev.get("sdk_version"),
             ip_address=ip_address,
         )
-        if ok:
+        if status == "inserted":
             inserted += 1
+        elif status == "duplicate":
+            duplicate += 1
         else:
             failed += 1
 

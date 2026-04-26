@@ -6,16 +6,15 @@ Enhanced deep link handling logic with intelligent matching
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 
 from fastapi import HTTPException, status
 
 from .config import Config
 from .database import db_manager
-from .models import ResolveRequest, FingerprintData, SessionData
-from .core.intelligent_matcher import IntelligentMatcher, MatchResult
-from .core.devicecheck import get_verifier as get_dc_verifier
+from .models import FingerprintData
+from .core.intelligent_matcher import IntelligentMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +58,9 @@ class DeepLinkHandler:
             session_id = str(uuid.uuid4())
             ttl_hours = ttl_hours or self.config.DEFAULT_TTL_HOURS
 
-            expires_at = datetime.now() + timedelta(hours=ttl_hours)
+            expires_at = (
+                datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+            ).strftime("%Y-%m-%d %H:%M:%S")
 
             query = """
                 INSERT INTO deeplink_sessions
@@ -249,11 +250,11 @@ class DeepLinkHandler:
             query = """
                 SELECT session_id, promo_id, domain, created_at, user_agent,
                        timezone, language, screen_size, model, ip_address,
-                       match_confidence, match_details
+                       match_confidence, match_details, match_method, is_resolved, resolved_at
                 FROM deeplink_sessions
                 WHERE device_check_token_hash = ?
                   AND expires_at > CURRENT_TIMESTAMP
-                  AND is_resolved = FALSE
+                ORDER BY resolved_at DESC, created_at DESC
                 LIMIT 1
             """
             results = db_manager.execute_query(query, (token_hash,))
@@ -268,7 +269,7 @@ class DeepLinkHandler:
         query = """
             SELECT session_id, promo_id, domain, created_at, user_agent,
                    timezone, language, screen_size, model, ip_address,
-                   match_confidence, match_details
+                   match_confidence, match_details, match_method
             FROM deeplink_sessions
             WHERE expires_at > CURRENT_TIMESTAMP
               AND is_resolved = FALSE
@@ -283,10 +284,12 @@ class DeepLinkHandler:
         confidence_score: Optional[float] = None,
         match_details: Optional[Dict[str, Any]] = None,
         device_check_token_b64: Optional[str] = None,  # Сохраняем хэш для будущих запусков
+        match_method_override: Optional[str] = None,
     ) -> bool:
         """Отметка сессии как разрешенной + привязка DeviceCheck токена."""
         try:
             match_details_json = json.dumps(match_details) if match_details else None
+            match_method = match_method_override or (match_details or {}).get('method')
 
             # Хэшируем DeviceCheck токен для хранения (не сырой токен!)
             dc_hash: Optional[str] = None
@@ -300,13 +303,15 @@ class DeepLinkHandler:
                     resolved_at = CURRENT_TIMESTAMP,
                     match_confidence = ?,
                     match_details = ?,
+                    match_method = COALESCE(?, match_method),
                     device_check_token_hash = COALESCE(?, device_check_token_hash),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE session_id = ?
+                  AND is_resolved = FALSE
             """
 
             rows_affected = db_manager.execute_update(
-                query, (confidence_score, match_details_json, dc_hash, session_id)
+                query, (confidence_score, match_details_json, match_method, dc_hash, session_id)
             )
 
             if rows_affected > 0:
@@ -327,6 +332,50 @@ class DeepLinkHandler:
         except Exception as e:
             logger.error("Ошибка отметки сессии как разрешенной: %s", e)
             return False
+
+    def resolve_matching_session(
+        self,
+        fingerprint: FingerprintData,
+        *,
+        device_check_token_b64: Optional[str] = None,
+        max_attempts: int = 2,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Find a match and atomically claim it.
+
+        Matching and claiming are intentionally retried because another request
+        may resolve the same session between SELECT and UPDATE.
+        """
+        for _ in range(max_attempts):
+            matching_session = self.find_matching_session(fingerprint)
+            if not matching_session:
+                return None
+
+            if matching_session.get("is_resolved"):
+                logger.info(
+                    "Возвращаем уже resolved сессию %s по точному сигналу",
+                    matching_session["session_id"],
+                )
+                return matching_session
+
+            confidence_score = matching_session.get('match_confidence', 0.0)
+            match_details = matching_session.get('match_details', {})
+
+            if self.mark_session_resolved(
+                session_id=matching_session['session_id'],
+                confidence_score=confidence_score,
+                match_details=match_details,
+                device_check_token_b64=device_check_token_b64,
+                match_method_override=matching_session.get('match_method'),
+            ):
+                return matching_session
+
+            logger.info(
+                "Сессия %s была захвачена конкурентным resolve, повторяем подбор",
+                matching_session['session_id'],
+            )
+
+        return None
 
     def cleanup_expired_sessions(self) -> int:
         """Очистка истекших сессий"""
@@ -391,7 +440,7 @@ class DeepLinkHandler:
                 'sessions_last_hour': sessions_last_hour,
                 'average_confidence': float(avg_confidence or 0.0),
                 'matcher_stats': self.stats,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
         except Exception as e:
@@ -399,7 +448,7 @@ class DeepLinkHandler:
             return {
                 'error': 'Не удалось получить статистику',
                 'matcher_stats': self.stats,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
     def optimize_algorithm_weights(self) -> Dict[str, float]:

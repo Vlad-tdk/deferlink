@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .campaign_decoder import CampaignDecoder, CAPIEventInstruction
@@ -106,7 +106,11 @@ class SKANService:
             (parsed_postback, db_row_id, capi_instruction_or_none)
         """
         pb = self._parser.parse(payload)
-        row_id = self._persist(pb, conn)
+        row_id, inserted_new = self._persist(pb, conn)
+        if not inserted_new:
+            logger.info("SKAN duplicate postback ignored: transaction_id=%s", pb.transaction_id)
+            return pb, row_id, None
+
         self._update_distribution(pb, conn)
 
         instruction: Optional[CAPIEventInstruction] = None
@@ -119,7 +123,7 @@ class SKANService:
     # ── Internal ─────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _persist(pb: SKANPostback, conn: sqlite3.Connection) -> int:
+    def _persist(pb: SKANPostback, conn: sqlite3.Connection) -> tuple[int, bool]:
         cur = conn.cursor()
         try:
             cur.execute(
@@ -154,7 +158,7 @@ class SKANService:
                 ),
             )
             conn.commit()
-            return cur.lastrowid
+            return cur.lastrowid, True
         except sqlite3.IntegrityError:
             # Duplicate transaction_id — return existing row id
             conn.rollback()
@@ -163,7 +167,7 @@ class SKANService:
                 (pb.transaction_id,),
             )
             row = cur.fetchone()
-            return int(row[0]) if row else -1
+            return (int(row[0]) if row else -1), False
 
     @staticmethod
     def _update_distribution(pb: SKANPostback, conn: sqlite3.Connection) -> None:
@@ -171,7 +175,7 @@ class SKANService:
         if pb.conversion_value is None or not pb.app_id:
             return
 
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         cur = conn.cursor()
         try:
             cur.execute(

@@ -102,6 +102,16 @@ def list_configs(app_id: Optional[str] = Query(None)) -> Dict[str, Any]:
 def create_config(body: CAPIConfigCreate) -> Dict[str, Any]:
     with db_manager.get_connection() as conn:
         cur = conn.cursor()
+        existing = cur.execute(
+            """
+            SELECT id FROM capi_configs
+            WHERE app_id = ? AND platform = ?
+            LIMIT 1
+            """,
+            (body.app_id, body.platform),
+        ).fetchone()
+        if existing:
+            raise HTTPException(409, "config for app_id/platform already exists")
         try:
             cur.execute(
                 """
@@ -188,7 +198,7 @@ async def test_event(body: CAPITestEvent) -> Dict[str, Any]:
     event = CAPIEventData(
         event_name    = body.event_name,
         event_id      = body.event_id,
-        event_time    = int(datetime.utcnow().timestamp()),
+        event_time    = int(datetime.now().timestamp()),
         action_source = "app",
         user_data     = CAPIUserData(
             client_ip_address=body.ip,
