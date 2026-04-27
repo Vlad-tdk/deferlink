@@ -1,9 +1,32 @@
+<div align="center">
+
 # DeferLink
 
-**Self-hosted mobile attribution platform** — deferred deep linking, cloaking, SKAdNetwork 4.0 and Facebook Conversions API in one stack. iOS SDK + Python backend, no third-party MMP, full data ownership.
+**Self-hosted mobile attribution. Deferred deep linking, cloaking, SKAdNetwork 4.0 and Facebook CAPI — one stack, full data ownership.**
 
-> Languages: **English (this file)** · [Русский](README_RU.md)
-> Per-module docs: [`doc/en/`](doc/en/) · [`doc/ru/`](doc/ru/)
+[![iOS](https://img.shields.io/badge/iOS-14.0%2B-000000?logo=apple&logoColor=white)](https://developer.apple.com/ios/)
+[![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)](https://swift.org)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![SKAdNetwork](https://img.shields.io/badge/SKAdNetwork-4.0-1d72b8)](https://developer.apple.com/documentation/storekit/skadnetwork)
+[![License](https://img.shields.io/badge/license-See%20LICENSE-lightgrey)](LICENSE)
+
+[Quick start](#-quick-start) · [Architecture](#-architecture) · [Modules](#-module-map) · [Docs](doc/en/) · [Русский](README_RU.md)
+
+</div>
+
+---
+
+## Why DeferLink
+
+A drop-in replacement for AppsFlyer / Adjust / Branch — **without the $30k MRR contract** and without sending your install funnel to a third party.
+
+- **Deferred deep linking** that actually works on iOS 17 — clipboard, shared cookie, DeviceCheck, fingerprint.
+- **Cloaking engine** with Bayesian scoring — bots, ad reviewers and scrapers see what they should see.
+- **SKAdNetwork 4.0** end-to-end — 6-bit CV, PB1/2/3 postback parsing, Apple ECDSA verification.
+- **Facebook Conversions API** with deduplication and exponential retries.
+- **AppsFlyer-compatible event taxonomy** — `af_purchase`, `af_complete_registration`, funnels, cohort revenue.
+- **Single SQLite file. One Python process. One Swift package.** Runs on a $5 VPS.
 
 ---
 
@@ -11,18 +34,20 @@
 
 | Capability | What you get |
 |---|---|
-| **Deferred deep linking** | A user clicks an ad → installs the app → opens it → lands on the *correct* promo screen. No paste, no manual code. |
-| **4-tier matching** | Clipboard token (100 %) → SFSafariViewController shared cookie (~99 %) → Apple DeviceCheck (~97 %) → fingerprint (60–90 %). |
-| **Cloaking engine** | IP / ASN / UA / behavioural detection of bots, ad reviewers and scrapers. SEO-page or compliant-page response per visitor type. |
-| **SKAdNetwork 4.0** | 6-bit conversion-value scheme `[revenue:3][engagement:2][flag:1]` with PB1/PB2/PB3 postback handling and Apple ECDSA signature verification. |
-| **Facebook Conversions API** | Auto-forwarding of SKAN postbacks and SDK events to Meta with deduplication and retry. |
-| **Event tracking** | AppsFlyer-style standard events (`af_purchase`, `af_complete_registration`, …), funnels, cohort revenue, custom properties. |
+| **Deferred deep linking** | Click ad → install → first launch lands on the *correct* promo screen. No paste, no manual codes. |
+| **4-tier matching** | Clipboard token (~100 %) → SFSafariViewController shared cookie (~99 %) → Apple DeviceCheck (~97 %) → fingerprint (60–90 %). |
+| **Cloaking engine** | IP / ASN / UA / behavioural detection of bots, ad reviewers, scrapers. SEO-page or compliant-page response per visitor type. |
+| **SKAdNetwork 4.0** | 6-bit CV scheme `[revenue:3][engagement:2][flag:1]`, PB1/PB2/PB3 postbacks, Apple ECDSA signature verification. |
+| **Facebook CAPI** | Auto-forward of SKAN postbacks and SDK events to Meta, with dedup and retry. |
+| **Event tracking** | AppsFlyer-style standard events, funnels, cohort revenue, custom properties. |
 
 ---
 
-## Quick start (5 minutes)
+## Quick start
 
-### 1. Run the backend
+> **Prereqs:** Python 3.10+, Xcode 15+, iOS 14.0+ simulator or device.
+
+### 1 · Run the backend
 
 ```bash
 git clone https://github.com/your-org/deferlink.git
@@ -31,98 +56,102 @@ cd deferlink
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Optional: edit env vars (defaults are dev-friendly)
-export API_HOST=0.0.0.0
-export API_PORT=8000
-
 python run.py
 ```
 
-Server is now at `http://localhost:8000`. Sanity check:
+Server is up on `http://localhost:8000`. Sanity check:
 
 ```bash
 curl http://localhost:8000/api/v1/health/quick
 # {"status":"ok"}
 ```
 
-### 2. Add the iOS SDK
+### 2 · Add the iOS SDK
 
-In Xcode → **File → Add Package Dependencies…** → paste your fork URL of `DeferLinkSDK`, or drag the local `DeferLinkSDK/` folder as a Swift package.
+In Xcode → **File → Add Package Dependencies…** → URL of your `DeferLinkSDK` fork, or drag the local `DeferLinkSDK/` folder as a Swift package.
 
 ```swift
-// AppDelegate.swift
 import DeferLinkSDK
 
-func application(_ app: UIApplication,
-                 didFinishLaunchingWithOptions launchOptions: …) -> Bool {
-    DeferLink.configure(
-        baseURL:      "https://api.your-domain.com",
-        appURLScheme: "myapp",
-        debugLogging: true
-    )
+@main
+struct MyApp: App {
+    init() {
+        DeferLink.configure(
+            baseURL:      "https://api.your-domain.com",
+            appURLScheme: "myapp",
+            debugLogging: true
+        )
 
-    DeferLink.shared.resolveOnFirstLaunch { result in
-        if let promoId = result?.promoId {
-            // navigate to /promo/<promoId>
+        DeferLink.shared.resolveOnFirstLaunch { result in
+            if let promoId = result?.promoId {
+                // route to /promo/<promoId>
+            }
         }
     }
-    return true
-}
 
+    var body: some Scene { WindowGroup { ContentView() } }
+}
+```
+
+```swift
 // SceneDelegate.swift
 func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
     URLContexts.forEach { DeferLink.shared.handleOpenURL($0.url) }
 }
 ```
 
-### 3. Track events (optional)
+### 3 · Track events (optional)
 
 ```swift
 DeferLink.shared.logEvent(.purchase(9.99, currency: "USD"))
 DeferLink.shared.logEvent("af_complete_registration",
                           properties: ["method": "email"])
+DeferLink.shared.enableSKAdNetwork(appId: "1234567890")
 ```
 
-### 4. Try it locally
+### 4 · Try it locally
 
-A full SwiftUI test harness lives in `DeferLinkTestApp/` — it drives every endpoint and runs deterministic seed→resolve scenarios. Open `DeferLinkTestApp.xcodeproj`, point its `NetworkManager.baseURL` at your server (`http://127.0.0.1:8000` for the iOS Simulator), and tap *Run All Tests*.
+A full SwiftUI test harness lives in `DeferLinkTestApp/`. It drives every endpoint and runs deterministic seed → resolve scenarios. Open `DeferLinkTestApp.xcodeproj`, point `NetworkManager.baseURL` at your backend (`http://127.0.0.1:8000` for the iOS Simulator), and tap **Run All Tests**.
 
-Detailed install / run / test steps live in [`doc/en/install-and-test.md`](doc/en/install-and-test.md).
+> Detailed install / run / test guide → [`doc/en/install-and-test.md`](doc/en/install-and-test.md)
 
 ---
 
-## Architecture at a glance
+## Architecture
 
 ```
-                ┌──────────────────────────────────────────┐
-  ad click  →   │  /dl?promo_id=…&domain=…  (cloaking gate) │
-                │      ├── bot/reviewer  → SEO_PAGE          │
-                │      └── real user     → /escape (Safari)  │
-                │           └── clipboard write + App Store  │
-                └──────────────────────────────────────────┘
-                                     │
-                                user installs & opens app
-                                     ▼
-                ┌──────────────────────────────────────────┐
-  app first    │  POST /resolve                              │
-  launch  →    │   ├── tier 1: clipboard_token               │
-                │   ├── tier 2: safari_cookie_session_id      │
-                │   ├── tier 3: device_check_token            │
-                │   └── tier 4: fingerprint (timezone + …)    │
-                │      → returns promo_id, session_id         │
-                └──────────────────────────────────────────┘
-                                     │
-                ┌──────────────────────────────────────────┐
-   in-app     │  POST /api/v1/events/batch                  │
-   events →   │   • dedup by event_id                       │
-                │   • forward to Facebook CAPI                │
-                │  Apple postback → /api/v1/skadnetwork/…     │
-                │   • parse + verify signature + decode CV    │
-                │   • forward to Facebook CAPI                │
-                └──────────────────────────────────────────┘
+                    ┌─────────────────────────────────────────────┐
+   ad click   ──►   │  GET /dl?promo_id=…&domain=…                 │
+                    │     │  cloaking engine                        │
+                    │     ├── bot / ad reviewer  → SEO_PAGE         │
+                    │     └── real user          → /escape          │
+                    │                  │                            │
+                    │                  └─► clipboard write          │
+                    │                       + redirect to App Store │
+                    └─────────────────────────────────────────────┘
+                                       │
+                            user installs and opens app
+                                       ▼
+                    ┌─────────────────────────────────────────────┐
+   first launch ─►  │  POST /resolve                                │
+                    │     ├── tier 1  clipboard_token               │
+                    │     ├── tier 2  safari shared cookie          │
+                    │     ├── tier 3  Apple DeviceCheck             │
+                    │     └── tier 4  fingerprint (tz, locale, …)   │
+                    │  → returns promo_id, session_id, match_method │
+                    └─────────────────────────────────────────────┘
+                                       │
+                    ┌─────────────────────────────────────────────┐
+   in-app   ─►      │  POST /api/v1/events/batch                    │
+   events           │     • dedup by event_id                       │
+                    │     • forward to Facebook CAPI                │
+                    │  Apple postback → /api/v1/skadnetwork/postback│
+                    │     • parse + verify ECDSA + decode CV        │
+                    │     • forward to Facebook CAPI                │
+                    └─────────────────────────────────────────────┘
 ```
 
-A more detailed walkthrough — including module boundaries, threading model and DB schema — is in [`doc/en/architecture.md`](doc/en/architecture.md).
+> Detailed walkthrough — module boundaries, threading model, DB schema → [`doc/en/architecture.md`](doc/en/architecture.md)
 
 ---
 
@@ -130,69 +159,82 @@ A more detailed walkthrough — including module boundaries, threading model and
 
 | Subsystem | Code | Docs |
 |---|---|---|
-| HTTP API surface | `app/api/`, `app/main.py` | [`doc/en/api-reference.md`](doc/en/api-reference.md) |
-| Deferred deep links | `app/deeplink_handler.py`, `app/core/intelligent_matcher.py`, `app/core/safari_escape.py` | [`doc/en/backend.md`](doc/en/backend.md) |
-| Cloaking | `app/core/cloaking/` | [`doc/en/cloaking.md`](doc/en/cloaking.md) |
-| SKAdNetwork | `app/core/skadnetwork/` | [`doc/en/skadnetwork.md`](doc/en/skadnetwork.md) |
-| Facebook CAPI | `app/core/capi/` | [`doc/en/capi.md`](doc/en/capi.md) |
-| iOS SDK | `DeferLinkSDK/Sources/DeferLinkSDK/` | [`doc/en/sdk-ios.md`](doc/en/sdk-ios.md) |
+| HTTP API surface | `app/api/`, `app/main.py` | [`api-reference.md`](doc/en/api-reference.md) |
+| Deferred deep links | `app/deeplink_handler.py`, `app/core/intelligent_matcher.py`, `app/core/safari_escape.py` | [`backend.md`](doc/en/backend.md) |
+| Cloaking | `app/core/cloaking/` | [`cloaking.md`](doc/en/cloaking.md) |
+| SKAdNetwork | `app/core/skadnetwork/` | [`skadnetwork.md`](doc/en/skadnetwork.md) |
+| Facebook CAPI | `app/core/capi/` | [`capi.md`](doc/en/capi.md) |
+| iOS SDK | `DeferLinkSDK/Sources/DeferLinkSDK/` | [`sdk-ios.md`](doc/en/sdk-ios.md) |
+| Install · run · test | — | [`install-and-test.md`](doc/en/install-and-test.md) |
 
-Russian mirror: [`doc/ru/`](doc/ru/).
+> 🇷Russian mirror: [`doc/ru/`](doc/ru/) · [`README_RU.md`](README_RU.md)
 
 ---
 
 ## Configuration cheat-sheet
 
-All settings come from environment variables — see `app/config.py` for the full list.
+All settings come from environment variables — full list in `app/config.py`.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `API_HOST` / `API_PORT` | `0.0.0.0` / `8000` | Bind address. For iOS Simulator point the SDK at `127.0.0.1`. |
+| `API_HOST` / `API_PORT` | `0.0.0.0` / `8000` | Bind. iOS Simulator → `127.0.0.1`. |
 | `DATABASE_PATH` | `data/deeplinks.db` | SQLite file. |
-| `DEFAULT_TTL_HOURS` | `48` | How long browser sessions live before cleanup. |
-| `SECRET_KEY` | `dev-secret-key-…` | **Must change in production**, ≥32 chars. |
-| `ENVIRONMENT` | `development` | Set to `production` to enable strict validation. |
+| `DEFAULT_TTL_HOURS` | `48` | Browser-session lifetime before cleanup. |
+| `SECRET_KEY` | dev-secret | **Change in prod**, ≥32 chars. |
+| `ENVIRONMENT` | `development` | `production` enables strict validation. |
 | `DEVICECHECK_ENABLED` | `false` | Apple DeviceCheck server-side verification. |
-| `DEVICECHECK_TEAM_ID` / `_KEY_ID` / `_KEY_PATH` | — | Apple Developer credentials, `.p8` file. |
-| `APP_STORE_ID` | — | Used by the `/escape` page meta-tag. |
+| `DEVICECHECK_TEAM_ID` / `_KEY_ID` / `_KEY_PATH` | — | Apple Developer creds, `.p8` file. |
 | `APP_URL_SCHEME` | `deferlink` | Must match SDK `appURLScheme` and `Info.plist`. |
-| `CAPI_RETRY_INTERVAL_SECONDS` | `60` | Background CAPI retry tick. |
+| `CAPI_RETRY_INTERVAL_SECONDS` | `300` | Background CAPI retry tick. |
 | `LOG_LEVEL` | `INFO` | `DEBUG` enables `uvicorn --reload`. |
 
-Production checklist is in [`doc/en/install-and-test.md`](doc/en/install-and-test.md#production-checklist).
+> Production checklist → [`install-and-test.md`](doc/en/install-and-test.md#4-production-checklist)
 
 ---
 
-## Running the test suite
+## Tests
 
 ```bash
-pytest                          # backend unit + integration tests
-pytest tests/test_deeplinks.py  # one module
+pytest                                  # all backend tests
+pytest tests/test_deeplink_handler.py   # one module
+pytest -k capi -v                       # by keyword
 ```
 
-For the iOS SDK and the test harness app, open the Xcode workspace and run the bundled test plan — details in [`doc/en/install-and-test.md`](doc/en/install-and-test.md#testing-the-ios-sdk).
+For the iOS SDK and the test-harness app, open `DeferLinkTestApp.xcodeproj` in Xcode and run the bundled test plan — full instructions in [`install-and-test.md`](doc/en/install-and-test.md#testing-the-ios-sdk).
 
 ---
 
-## Status & versioning
+## Status
 
-* iOS SDK version: **1.0.0** (see `DeferLinkSDKInfo.version`)
-* CV schema: **`rev3_eng2_flag1`** (stable wire contract — never breaks)
-* Server: stateless workers + SQLite. Drop-in Postgres support is on the roadmap.
+| | |
+|---|---|
+| **iOS SDK version** | `1.0.0` (`DeferLinkSDKInfo.version`) |
+| **CV schema** | `rev3_eng2_flag1` — stable wire contract, never breaks |
+| **Server** | stateless workers + SQLite (Postgres on roadmap) |
+| **Min iOS** | 14.0 (soft fallbacks for 15.4 / 16.1 SKAN APIs) |
 
 ---
 
 ## Cooperation, integrations, custom builds
 
-For commercial integrations, ad-network adapters, custom CV schemas, on-prem deployment help or anything not covered by the docs:
+For commercial integrations, ad-network adapters, custom CV schemas, on-prem deployment help — or anything not covered by the docs:
 
-* 📧 **Email** — [tdk@null.net](mailto:tdk@null.net)
-* 📨 **Telegram** — [@smail_ios](https://t.me/smail_ios)
+<div align="center">
 
-Issues / PRs that don't need a private discussion are welcome on GitHub.
+**Email** — [tdk@null.net](mailto:tdk@null.net) &nbsp;·&nbsp; 📨 **Telegram** — [@smail_ios](https://t.me/smail_ios)
+
+</div>
+
+Issues and PRs that don't need a private discussion are welcome on GitHub.
 
 ---
 
 ## License
 
 See [`LICENSE`](LICENSE).
+
+<div align="center">
+
+<sub>Built for indie devs and small studios who want to keep their attribution data.</sub>
+
+</div>
