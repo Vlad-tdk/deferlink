@@ -50,7 +50,7 @@ A drop-in replacement for AppsFlyer / Adjust / Branch — **without the $30k MRR
 ### 1 · Run the backend
 
 ```bash
-git clone https://github.com/your-org/deferlink.git
+git clone https://github.com/Vlad-tdk/deferlink.git
 cd deferlink
 
 python3 -m venv .venv && source .venv/bin/activate

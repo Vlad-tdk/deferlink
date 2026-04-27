@@ -25,7 +25,7 @@
 ### 1. Запустите бэкенд
 
 ```bash
-git clone https://github.com/your-org/deferlink.git
+git clone https://github.com/Vlad-tdk/deferlink.git
 cd deferlink
 
 python3 -m venv .venv && source .venv/bin/activate
